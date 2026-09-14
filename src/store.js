@@ -318,11 +318,6 @@ export class Store {
   }
 
   getStats({ sinceIso, resolution = "raw" }) {
-    const counts = new Map(
-      this.db.prepare("SELECT pair_id, COUNT(*) AS n, SUM(ok) AS ok_n FROM quotes WHERE ts >= ? GROUP BY pair_id")
-        .all(sinceIso)
-        .map((row) => [row.pair_id, { n: row.n, okN: row.ok_n }]),
-    );
     const swapTypes = new Map(this.db.prepare("SELECT id, swap_type FROM pairs").all().map((row) => [row.id, row.swap_type]));
 
     if (resolution === "hourly") {
@@ -340,12 +335,16 @@ export class Store {
         const swapType = swapTypes.get(pairId) ?? "EXACT_OUTPUT";
         const useOut = swapType === "EXACT_INPUT";
         const pick = (suffix) => rows.map((row) => row[`amount_${useOut ? "out" : "in"}_${suffix}`]).filter((v) => v !== null);
-        const count = counts.get(pairId) ?? { n: 0, okN: 0 };
+        // 计数必须来自小时桶本身。若从原始 quotes 表取，一旦 pruneRaw 清掉保留期外的原始数据，
+        // 长窗口查询的 n / okN / okRate 就会偏低，而同一响应里的 metric / latency 却来自小时桶
+        // —— 一个响应两个数据源。小时桶永久保留的意义正是让长窗口不掉数。
+        const n = rows.reduce((sum, row) => sum + row.n, 0);
+        const okN = rows.reduce((sum, row) => sum + row.ok_n, 0);
         pairs.push({
           pairId,
-          n: count.n,
-          okN: count.okN,
-          okRate: count.n === 0 ? null : count.okN / count.n,
+          n,
+          okN,
+          okRate: n === 0 ? null : okN / n,
           metric: {
             mean: average(rows.map((row) => row[`amount_${useOut ? "out" : "in"}_avg`])),
             min: min(pick("min")),
@@ -357,6 +356,12 @@ export class Store {
       return { resolution, pairs };
     }
 
+    // counts 只在 raw 分支用得到，放到这里避免 hourly 请求白跑一次全表聚合
+    const counts = new Map(
+      this.db.prepare("SELECT pair_id, COUNT(*) AS n, SUM(ok) AS ok_n FROM quotes WHERE ts >= ? GROUP BY pair_id")
+        .all(sinceIso)
+        .map((row) => [row.pair_id, { n: row.n, okN: row.ok_n }]),
+    );
     const grouped = new Map();
     for (const row of this.db.prepare(`
       SELECT q.pair_id, CAST(q.amount_in AS REAL) AS amount_in, CAST(q.amount_out AS REAL) AS amount_out, q.latency_ms
