@@ -2264,7 +2264,7 @@ git commit -m "feat: 小时聚合与保留策略，聚合幂等"
   - `priceMetric(quote, swapType): number | null`
   - `evaluate({ quote, history, prevStatus, detect }): { status, metric, baseline, sampleCount, deviationPct, event }`
     - `event` 为 `null` 或 `{ kind: "error"|"deviation"|"recover", isNew: boolean, detail: object }`
-    - **每轮异常都会产出 event**，`isNew` 表示是否为状态迁移。是否真的推送由 `notify` 决定（见 Task 9）
+    - **每轮异常都会产出 event**，`isNew` 表示是否为状态迁移。是否真的推送由 `notify` 决定（见 Task 10）
 
 **关键约定**：`history` 是**本轮写入之前**读出的历史报价，因此基准不含当前样本，不会被自己拉偏。`history` 里 `ok === false` 的行不参与基准。
 
