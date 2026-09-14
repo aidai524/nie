@@ -204,6 +204,31 @@ test("mergeDeep 不改动入参", () => {
   assert.deepEqual(out, { a: { b: 1, c: 2 }, list: [3] });
   assert.notEqual(out.list, base.list);
 });
+
+test("配置里省略某个段时，它与 base 不能是同一个对象引用", () => {
+  const base = { slack: { webhookUrl: "" }, pairs: [] };
+  const out = mergeDeep(base, { pairs: [1] });
+  assert.notEqual(out.slack, base.slack, "省略的段也必须深拷贝，否则会被写穿");
+  out.slack.webhookUrl = "mutated";
+  assert.equal(base.slack.webhookUrl, "", "写 out 不能影响 base");
+});
+
+test("环境变量覆盖不会污染 DEFAULT_CONFIG（模块级状态泄漏回归）", () => {
+  const before = DEFAULT_CONFIG.slack.webhookUrl;
+  // 注意：这里直接调 loadConfig 而不走 load 助手，因为助手会注入 slack 段，
+  // 而这条用例要考的正是「配置里完全没有 slack 段」的路径
+  loadConfig({
+    file: "config.json",
+    env: { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/leaked" },
+    readFile: read(ONE_PAIR),
+  });
+  assert.equal(DEFAULT_CONFIG.slack.webhookUrl, before, "DEFAULT_CONFIG 不能被写穿");
+  // 紧接着一次不带环境变量、也不带 slack 段的加载，必须仍然因为缺 webhook 而失败
+  assert.throws(
+    () => loadConfig({ file: "config.json", env: {}, readFile: read(ONE_PAIR) }),
+    (e) => e instanceof ConfigError && e.issues.some((i) => i.includes("webhookUrl")),
+  );
+});
 ```
 
 - [ ] **Step 3: 跑测试确认失败**
@@ -280,14 +305,32 @@ const POSITIVE_DECIMAL = /^\d+(\.\d+)?$/;
 export function mergeDeep(base, override) {
   if (Array.isArray(override)) return override.slice();
   if (override === null || typeof override !== "object") return override;
-  const out = { ...base };
+  const out = {};
+  // 先深拷贝 base 的每一个嵌套值。只写 {...base} 的话，配置里没提到的段
+  // （如整个 slack）会与 DEFAULT_CONFIG 共享同一个对象引用，后续
+  // `merged.slack.webhookUrl = env.SLACK_WEBHOOK_URL` 就写穿了模块默认值，
+  // 同一个进程里第二次 loadConfig 会继承上一次的环境变量。
+  for (const [key, baseValue] of Object.entries(base ?? {})) {
+    out[key] = baseValue !== null && typeof baseValue === "object" ? clonePlain(baseValue) : baseValue;
+  }
   for (const [key, value] of Object.entries(override)) {
     const baseValue = base?.[key];
     const bothPlainObjects =
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       baseValue !== null && typeof baseValue === "object" && !Array.isArray(baseValue);
-    out[key] = bothPlainObjects ? mergeDeep(baseValue, value) : value;
+    out[key] = bothPlainObjects
+      ? mergeDeep(baseValue, value)
+      : (value !== null && typeof value === "object" ? clonePlain(value) : value);
   }
+  return out;
+}
+
+/** 只处理 JSON 能出现的值（对象、数组、基本类型），不处理 Map/Date/函数 */
+function clonePlain(value) {
+  if (Array.isArray(value)) return value.map(clonePlain);
+  if (value === null || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) out[key] = clonePlain(nested);
   return out;
 }
 
