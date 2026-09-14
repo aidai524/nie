@@ -3222,18 +3222,20 @@ async function withServer({ bearerToken = "", health, cors = "*" } = {}, seed = 
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
   let closed = false;
-  const context = {
+  const close = async () => {
+    // 幂等：用例自己会关一次，兜底收尾可能又调一次
+    if (closed) return;
+    closed = true;
+    server.close();
+    await once(server, "close");
+    store.close();
+  };
+  cleanupOnExit.push(close);
+  return {
     base,
     config,
     async get(path, init) { return fetch(`${base}${path}`, init); },
-    async close() {
-      // 幂等：用例自己会关一次，兵底收尾可能又调一次
-      if (closed) return;
-      closed = true;
-      server.close();
-      await once(server, "close");
-      store.close();
-    },
+    close,
   };
 }
 
