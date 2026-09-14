@@ -64,14 +64,32 @@ const POSITIVE_DECIMAL = /^\d+(\.\d+)?$/;
 export function mergeDeep(base, override) {
   if (Array.isArray(override)) return override.slice();
   if (override === null || typeof override !== "object") return override;
-  const out = { ...base };
+  const out = {};
+  // 先深拷贝 base 的每一个嵌套值。只写 {...base} 的话，配置里没提到的段
+  // （如整个 slack）会与 DEFAULT_CONFIG 共享同一个对象引用，后续
+  // `merged.slack.webhookUrl = env.SLACK_WEBHOOK_URL` 就写穿了模块默认值，
+  // 同一个进程里第二次 loadConfig 会继承上一次的环境变量。
+  for (const [key, baseValue] of Object.entries(base ?? {})) {
+    out[key] = baseValue !== null && typeof baseValue === "object" ? clonePlain(baseValue) : baseValue;
+  }
   for (const [key, value] of Object.entries(override)) {
     const baseValue = base?.[key];
     const bothPlainObjects =
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       baseValue !== null && typeof baseValue === "object" && !Array.isArray(baseValue);
-    out[key] = bothPlainObjects ? mergeDeep(baseValue, value) : value;
+    out[key] = bothPlainObjects
+      ? mergeDeep(baseValue, value)
+      : (value !== null && typeof value === "object" ? clonePlain(value) : value);
   }
+  return out;
+}
+
+/** 只处理 JSON 能出现的值（对象、数组、基本类型），不处理 Map/Date/函数 */
+function clonePlain(value) {
+  if (Array.isArray(value)) return value.map(clonePlain);
+  if (value === null || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) out[key] = clonePlain(nested);
   return out;
 }
 
