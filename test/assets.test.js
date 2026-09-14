@@ -60,10 +60,10 @@ test("resolveAssetId：1click 命中时直接用它的 assetId", () => {
 test("resolveAssetId：未命中时按规则拼接", () => {
   // nearc 上没有 contract 的链
   assert.equal(resolveAssetId({ network: "zec", contract_address: "" }, []), "nep141:zec.omft.near");
-  // 0x 开头的合约
-  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xDEAD.omft.near");
+  // 0x 开头的合约：强制转小写（与真实 assetId 一致）
+  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xdead.omft.near");
   // 非 0x 的非 near 合约
-  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-So1abc.omft.near");
+  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-so1abc.omft.near");
   // near 本身
   assert.equal(resolveAssetId({ network: "near", contract_address: "usdc.near" }, []), "nep141:usdc.near");
 });

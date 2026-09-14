@@ -13,8 +13,11 @@ export function resolveAssetId(payToken, oneclickTokens) {
   if (hit?.assetId) return hit.assetId;
   if (network === "near" && contract) return `nep141:${payToken.contract_address}`;
   if (!contract) return `nep141:${network}.omft.near`;
-  if (contract.startsWith("0x")) return `nep141:${network}-${payToken.contract_address}.omft.near`;
-  return `nep141:${network}-${payToken.contract_address}.omft.near`;
+  // 统一小写：实测 1click 的 102 个 EVM 合约 assetId 里 101 个是全小写，
+  // 真实形如 nep141:eth-0xa0b8…eb48.omft.near。之前这里另起一个
+  // `if (contract.startsWith("0x"))` 分支但两条 return 模板完全相同，
+  // 唯一区别是用小写的 contract 还是原值 payToken.contract_address，属于无谓的死分支。
+  return `nep141:${network}-${contract}.omft.near`;
 }
 
 export function normalizeTokens({ stableflow, oneclick }) {
