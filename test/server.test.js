@@ -1,8 +1,14 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createConnection } from "node:net";
 import { openStore } from "../src/store.js";
 import { createServer } from "../src/server.js";
+
+// 断言失败时测试体走不到最后那句 `await ctx.close()`，监听中的 server 会让事件循环一直活着，
+// 把整个 `npm test` 挂住并掩盖真正的失败。这里给所有建过的 server 上一个兜底收尾。
+const cleanupOnExit = [];
+after(async () => { await Promise.all(cleanupOnExit.splice(0).map((close) => close())); });
 
 const PAIR = {
   id: "near:USDC>eth:USDC", label: "near:USDC → eth:USDC", fromKey: "near:USDC", toKey: "eth:USDC",
@@ -27,11 +33,21 @@ async function withServer({ bearerToken = "", health, cors = "*" } = {}, seed = 
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
+  let closed = false;
+  const close = async () => {
+    // 幂等：用例自己会关一次，兜底收尾可能又调一次
+    if (closed) return;
+    closed = true;
+    server.close();
+    await once(server, "close");
+    store.close();
+  };
+  cleanupOnExit.push(close);
   return {
     base,
     config,
     async get(path, init) { return fetch(`${base}${path}`, init); },
-    async close() { server.close(); await once(server, "close"); store.close(); },
+    close,
   };
 }
 
@@ -51,6 +67,24 @@ test("GET /health 超过 3 倍 intervalSec 未采集时 503", async () => {
   const res = await ctx.get("/health");
   assert.equal(res.status, 503);
   assert.equal((await res.json()).ok, false);
+  await ctx.close();
+});
+
+test("畸形的 Host 头返回 400，而不是把进程带走", async () => {
+  const ctx = await withServer();
+  // fetch 会自己规范化 Host，所以只能回到原始 socket 才能造出非法端口
+  const port = Number(new URL(ctx.base).port);
+  const raw = await new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port }, () => {
+      socket.write("GET /health HTTP/1.1\r\nHost: localhost:99999\r\nConnection: close\r\n\r\n");
+    });
+    let received = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { received += chunk; });
+    socket.on("end", () => resolve(received));
+    socket.on("error", reject);
+  });
+  assert.match(raw, /^HTTP\/1\.1 400/, "new URL 抛错时必须回 400，而不是变成未捕获异常");
   await ctx.close();
 });
 

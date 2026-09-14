@@ -69,7 +69,6 @@ function handle({ url, send, store, config, healthSnapshot }) {
 
 export function createServer({ store, config, healthSnapshot = () => ({}), logger = console }) {
   return createHttpServer((request, response) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const headers = {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": config.server.cors,
@@ -80,6 +79,17 @@ export function createServer({ store, config, healthSnapshot = () => ({}), logge
       response.writeHead(status, headers);
       response.end(JSON.stringify(payload));
     };
+
+    // Host 头是客户端可控且可能畸形的（非法端口、非法字符），new URL 会抛 TypeError。
+    // 这一行原本在 try 之外：抛出去就是未捕获异常，一个畸形请求就能把整个监控进程带走
+    // —— 而「进程是否还活着」正是这个服务要对外上报的东西。所以先解析、失败就回 400。
+    let url;
+    try {
+      url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    } catch {
+      send(400, { error: "请求 URL 无法解析" });
+      return;
+    }
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
