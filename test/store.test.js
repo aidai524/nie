@@ -143,6 +143,29 @@ test("getHistory 支持 pairId / 时间窗 / limit 组合", () => {
   store.close();
 });
 
+test("getStats 的 hourly 分支的计数来自小时桶而不是原始表（长窗口在原始数据被清理后才不掉数）", () => {
+  const store = fresh();
+  store.insertQuotes([
+    row(PAIR_A.id, "2026-09-15T00:10:00Z"), // 已聚合进小时桶
+    row(PAIR_A.id, "2026-09-15T01:10:00Z"), // 故意未聚合，只存在于原始表
+  ]);
+  // quotes_hourly 的公开写入接口属于 Task 7；这里直接用 db 造一条桶，专门考「计数从哪个表来」。
+  // 不能用公开 API：那正是这条用例要隔离掉的变量。
+  store.db.prepare(`
+    INSERT INTO quotes_hourly (pair_id, hour, n, ok_n, amount_in_avg, amount_in_min, amount_in_max,
+                               amount_out_avg, amount_out_min, amount_out_max, latency_avg_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(PAIR_A.id, "2026-09-15T00:00:00Z", 1, 1, 1501.5, 1501.5, 1501.5, 1500, 1500, 1500, 1000);
+  const [entry] = store.getStats({ sinceIso: "2026-09-15T00:00:00Z", resolution: "hourly" }).pairs;
+  assert.equal(entry.pairId, PAIR_A.id);
+  assert.equal(entry.n, 1, "只应统计已聚合进小时桶的那一条；从原始表取会得 2");
+  assert.equal(entry.okN, 1);
+  assert.equal(entry.okRate, 1);
+  assert.equal(entry.metric.mean, 1501.5);
+  assert.equal(entry.latency.mean, 1000);
+  store.close();
+});
+
 test("meta JSON 往返，缺失时给 fallback", () => {
   const store = fresh();
   assert.equal(store.getMeta("missing"), undefined);
