@@ -2014,6 +2014,27 @@ test("rollupHours 覆盖一个区间，且跳过无数据的桶", () => {
   store.close();
 });
 
+test("getStats 的 hourly 分支能读回小时聚合（raw 只覆盖到 24h，7d 靠这条路径）", () => {
+  const store = fresh();
+  store.insertQuotes([
+    row("2026-09-15T00:00:00.000Z", { amountIn: "100", latencyMs: 1000 }),
+    row("2026-09-15T00:30:00.000Z", { amountIn: "300", latencyMs: 3000 }),
+  ]);
+  store.rollupHour("2026-09-15T00:00:00.000Z");
+  const stats = store.getStats({ sinceIso: "2026-09-15T00:00:00.000Z", resolution: "hourly" });
+  assert.equal(stats.resolution, "hourly");
+  const [entry] = stats.pairs;
+  assert.equal(entry.pairId, PAIR.id);
+  assert.equal(entry.n, 2);
+  assert.equal(entry.okN, 2);
+  assert.equal(entry.okRate, 1);
+  assert.equal(entry.metric.mean, 200);
+  assert.equal(entry.metric.min, 100);
+  assert.equal(entry.metric.max, 300);
+  assert.equal(entry.latency.mean, 2000);
+  store.close();
+});
+
 test("pruneRaw 只删窗口之前的数据", () => {
   const store = fresh();
   store.insertQuotes([
@@ -2699,6 +2720,9 @@ export function parseQuote(payload) {
 export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, now = new Date() } = {}) {
   const ts = now.toISOString();
   const startedAt = Date.now();
+  // HTTP 状态码必须在解析前抢下来：bad_shape 是在 HTTP 201 之后才发现的，
+  // 如果只在 catch 里从 error 取状态码，这种情况会被误记成 null
+  let httpStatus = null;
   try {
     const response = await fetchJson(config.quoteEndpoint, {
       method: "POST",
@@ -2707,9 +2731,10 @@ export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, 
       timeoutMs: timeoutMs ?? config.requestTimeoutMs,
       fetchImpl,
     });
+    httpStatus = response.status;
     return {
       ts, pairId: pair.id, ok: true,
-      httpStatus: response.status, latencyMs: response.latencyMs,
+      httpStatus, latencyMs: response.latencyMs,
       ...parseQuote(response.payload),
       errorCode: null, errorMessage: null,
     };
@@ -2717,7 +2742,7 @@ export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, 
     const { errorCode, errorMessage } = classifyError(error);
     return {
       ts, pairId: pair.id, ok: false,
-      httpStatus: error instanceof HttpError ? error.status : null,
+      httpStatus: error instanceof HttpError ? error.status : httpStatus,
       latencyMs: Date.now() - startedAt,
       errorCode, errorMessage,
     };
@@ -3567,7 +3592,7 @@ test("runRound 连续失败时第二轮被抑制，alerts 仍然落库", async (
   await runRound(ctx);
   ctx.now = T(1);
   const second = await runRound(ctx);
-  assert.equal(second.alertsSent, 0, "三十秒内不重复提醒");
+  assert.equal(second.alertsSent, 0, "T(0) → T(1) 只过了一分钟，仍在 realertMinutes 内");
   assert.equal(sent.length, 2, "只有第一轮发了");
   assert.equal(store.getAlerts({}).length, 4, "两轮各落两条事件，只是没推");
   assert.equal(store.getPairStates().get(PAIR_A.id).consecutiveFailures, 2);
