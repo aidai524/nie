@@ -769,7 +769,7 @@ const STABLEFLOW = [
 
 const DEFAULTS = { swapType: "EXACT_OUTPUT", slippageTolerance: 10, confidentiality: "advanced", deadlineMs: 600000 };
 const ADDRESSES = { near: "monitor.near", eth: "0xADDR", zec: "t1addr" };
-const DEFAULT_AMOUNTS = { USDC: "1500", ZEC: "0.5" };
+const DEFAULT_AMOUNTS = { USDC: "1500", ZEC: "0.5", ETH: "0.05" };
 
 const build = (pairDefs, overrides = {}) =>
   buildPairs({
@@ -810,10 +810,10 @@ test("resolveAssetId：1click 命中时直接用它的 assetId", () => {
 test("resolveAssetId：未命中时按规则拼接", () => {
   // nearc 上没有 contract 的链
   assert.equal(resolveAssetId({ network: "zec", contract_address: "" }, []), "nep141:zec.omft.near");
-  // 0x 开头的合约
-  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xDEAD.omft.near");
+  // 0x 开头的合约：强制转小写（与真实 assetId 一致）
+  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xdead.omft.near");
   // 非 0x 的非 near 合约
-  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-So1abc.omft.near");
+  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-so1abc.omft.near");
   // near 本身
   assert.equal(resolveAssetId({ network: "near", contract_address: "usdc.near" }, []), "nep141:usdc.near");
 });
@@ -950,8 +950,11 @@ export function resolveAssetId(payToken, oneclickTokens) {
   if (hit?.assetId) return hit.assetId;
   if (network === "near" && contract) return `nep141:${payToken.contract_address}`;
   if (!contract) return `nep141:${network}.omft.near`;
-  if (contract.startsWith("0x")) return `nep141:${network}-${contract}.omft.near`;
-  return `nep141:${network}-${payToken.contract_address}.omft.near`;
+  // 统一小写：实测 1click 的 102 个 EVM 合约 assetId 里 101 个是全小写，
+  // 真实形如 nep141:eth-0xa0b8…eb48.omft.near。之前这里另起一个
+  // `if (contract.startsWith("0x"))` 分支但两条 return 模板完全相同，
+  // 唯一区别是用小写的 contract 还是原值 payToken.contract_address，属于无谓的死分支。
+  return `nep141:${network}-${contract}.omft.near`;
 }
 
 export function normalizeTokens({ stableflow, oneclick }) {
