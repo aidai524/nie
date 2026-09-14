@@ -2941,8 +2941,12 @@ test("日汇总：只在配置的那个本地小时发", () => {
   assert.equal(decideDigestAction({ enabled: true, lastDigestTs: null, nowIso: LOCAL(10), hourLocal: 9 }), false);
 });
 
-test("日汇总：一天内不重发（重启不会补发一堆）", () => {
-  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -1), nowIso: LOCAL(9, 5), hourLocal: 9 }), false);
+test("日汇总：同一小时内只发一次，且不会漏掉第二天", () => {
+  // 主用途：采集循环每分钟跑一次，若不在窗口内拦截，hourLocal 这一小时内会连发 60 条
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0), nowIso: LOCAL(9, 5), hourLocal: 9 }), false);
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0), nowIso: LOCAL(9, 59), hourLocal: 9 }), false);
+  // 关键的另一侧：20 小时窗口必须短于一天，否则第二天的汇总会被永久拦住（spec §6 要求不漏推）
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -1), nowIso: LOCAL(9, 5), hourLocal: 9 }), true);
   assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -2), nowIso: LOCAL(9, 5), hourLocal: 9 }), true);
 });
 
