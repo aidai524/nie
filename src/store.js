@@ -406,6 +406,60 @@ export class Store {
     this.db.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .run(key, JSON.stringify(value));
   }
+
+  /** 幂等：同一个小时重复跑会用新值覆盖，因为原始数据在保留期内不会变 */
+  rollupHour(hourIso) {
+    const nextHourIso = new Date(new Date(hourIso).getTime() + 3600 * 1000).toISOString();
+    const aggregates = this.db.prepare(`
+      SELECT pair_id,
+        COUNT(*) AS n,
+        SUM(ok) AS ok_n,
+        AVG(CAST(amount_in AS REAL)) AS amount_in_avg,
+        MIN(CAST(amount_in AS REAL)) AS amount_in_min,
+        MAX(CAST(amount_in AS REAL)) AS amount_in_max,
+        AVG(CAST(amount_out AS REAL)) AS amount_out_avg,
+        MIN(CAST(amount_out AS REAL)) AS amount_out_min,
+        MAX(CAST(amount_out AS REAL)) AS amount_out_max,
+        AVG(latency_ms) AS latency_avg_ms
+      FROM quotes WHERE ts >= ? AND ts < ? GROUP BY pair_id`).all(hourIso, nextHourIso);
+
+    const statement = this.db.prepare(`
+      INSERT INTO quotes_hourly (pair_id, hour, n, ok_n, amount_in_avg, amount_in_min, amount_in_max,
+                                 amount_out_avg, amount_out_min, amount_out_max, latency_avg_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(pair_id, hour) DO UPDATE SET
+        n = excluded.n, ok_n = excluded.ok_n,
+        amount_in_avg = excluded.amount_in_avg, amount_in_min = excluded.amount_in_min, amount_in_max = excluded.amount_in_max,
+        amount_out_avg = excluded.amount_out_avg, amount_out_min = excluded.amount_out_min, amount_out_max = excluded.amount_out_max,
+        latency_avg_ms = excluded.latency_avg_ms`);
+
+    for (const row of aggregates) {
+      statement.run(row.pair_id, hourIso, row.n, row.ok_n,
+        row.amount_in_avg, row.amount_in_min, row.amount_in_max,
+        row.amount_out_avg, row.amount_out_min, row.amount_out_max,
+        row.latency_avg_ms);
+    }
+    return { pairs: aggregates.length, rows: aggregates.length };
+  }
+
+  rollupHours(fromHourIso, toHourIsoExclusive) {
+    let hours = 0;
+    let rows = 0;
+    for (const hourIso of hourBucketsBetween(fromHourIso, toHourIsoExclusive)) {
+      const result = this.rollupHour(hourIso);
+      if (result.rows > 0) hours += 1;
+      rows += result.rows;
+    }
+    return { hours, rows };
+  }
+
+  pruneRaw(beforeIso) {
+    return Number(this.db.prepare("DELETE FROM quotes WHERE ts < ?").run(beforeIso).changes);
+  }
+
+  pruneHourly(beforeIso) {
+    return Number(this.db.prepare("DELETE FROM quotes_hourly WHERE hour < ?").run(beforeIso).changes);
+  }
 }
 
 function average(values) {
@@ -420,4 +474,25 @@ function min(values) {
 
 function max(values) {
   return values.length === 0 ? null : Math.max(...values);
+}
+
+/** 向下取整到整点。小时桶的 key 就是整点时刻的 ISO 字符串。 */
+export function hourFloorIso(date) {
+  const floored = new Date(date);
+  floored.setUTCMinutes(0, 0, 0);
+  return floored.toISOString();
+}
+
+const HOUR_MS = 3600 * 1000;
+const MAX_BUCKETS = 2000;
+
+/** 左闭右开。max 限位是为了防止有人传进一个荒谬的区间。 */
+export function hourBucketsBetween(fromIso, toIsoExclusive) {
+  const buckets = [];
+  const start = new Date(fromIso).getTime();
+  const end = new Date(toIsoExclusive).getTime();
+  for (let time = start; time < end && buckets.length < MAX_BUCKETS; time += HOUR_MS) {
+    buckets.push(new Date(time).toISOString());
+  }
+  return buckets;
 }
