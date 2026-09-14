@@ -98,7 +98,7 @@ nearintents_monitoring/
 ```js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, mergeDeep, ConfigError } from "../src/config.js";
+import { loadConfig, mergeDeep, ConfigError, DEFAULT_CONFIG } from "../src/config.js";
 
 const read = (obj) => () => JSON.stringify(obj);
 // 默认关掉 slack，否则每个用例都要编一个 webhook URL
@@ -450,7 +450,7 @@ export function loadConfig({ file = "config.json", env = process.env, readFile =
 - [ ] **Step 5: 跑测试确认全绿**
 
 Run: `npm test`
-Expected: PASS，13 个用例全过，且**输出里没有 ExperimentalWarning**（证明 `--disable-warning` 生效）
+Expected: PASS，14 个用例全过，且**输出里没有 ExperimentalWarning**（证明 `--disable-warning` 生效）
 
 - [ ] **Step 6: 提交**
 
