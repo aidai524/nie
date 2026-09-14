@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>NEAR Intents liquidity test</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #171a21;
+      --line: #2a3040;
+      --text: #e8ecf4;
+      --muted: #8b93a7;
+      --accent: #6ea8ff;
+      --ok: #3dd68c;
+      --err: #ff6b7a;
+      --code: #0b0d12;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 28px 20px 48px;
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 650;
+      margin: 0 0 6px;
+    }
+
+    .sub {
+      color: var(--muted);
+      margin: 0 0 22px;
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    form > * {
+      min-width: 0;
+    }
+
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    label.full,
+    .row-actions,
+    .status {
+      grid-column: 1 / -1;
+    }
+
+    input:not([type="checkbox"]),
+    select,
+    button,
+    textarea {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      font: inherit;
+      color: var(--text);
+      background: #10131a;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+    }
+
+    select {
+      text-overflow: ellipsis;
+    }
+
+    input:focus,
+    select:focus {
+      outline: 1px solid var(--accent);
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .check {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+      width: auto;
+      flex: none;
+      color: var(--text);
+    }
+
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      padding: 0;
+      flex: none;
+      accent-color: var(--accent);
+    }
+
+    button {
+      width: auto;
+      flex: none;
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 650;
+      border: 0;
+      cursor: pointer;
+      padding: 10px 14px;
+    }
+
+    button.ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .asset {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: var(--accent);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .status {
+      min-height: 18px;
+    }
+
+    .status.ok {
+      color: var(--ok);
+    }
+
+    .status.err {
+      color: var(--err);
+    }
+
+    section {
+      margin-top: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    section header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 0;
+      padding: 14px;
+      background: var(--code);
+      overflow: auto;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    @media (max-width: 720px) {
+      form {
+        grid-template-columns: 1fr;
+      }
+
+      label.full {
+        grid-column: auto;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>NEAR Intents liquidity test</h1>
+    <p class="sub">
+      Token list from StableFlow test API. Quote via Partner proxy with
+      <code>confidentiality: "advanced"</code> and default slippage 10.
+    </p>
+
+    <form id="form">
+      <label>
+        From token
+        <select id="fromToken" required></select>
+        <span class="asset" id="fromAsset"></span>
+      </label>
+      <label>
+        To token
+        <select id="toToken" required></select>
+        <span class="asset" id="toAsset"></span>
+      </label>
+      <label>
+        Amount
+        <input id="amount" inputmode="decimal" placeholder="1" value="1" autocomplete="off" />
+      </label>
+      <label>
+        Slippage (bps)
+        <input id="slippage" type="number" min="0" step="1" value="10" />
+      </label>
+      <label class="full">
+        Recipient
+        <input id="recipient" placeholder="Destination receive address" autocomplete="off" />
+      </label>
+      <label class="full">
+        Refund to
+        <input id="refundTo" placeholder="Refund address" autocomplete="off" />
+      </label>
+      <div class="row-actions">
+        <label class="check">
+          <input id="dry" type="checkbox" />
+          Dry run
+        </label>
+        <button type="submit" id="submit">Request quote</button>
+        <button type="button" class="ghost" id="swap">Swap from/to</button>
+      </div>
+      <div class="status" id="status"></div>
+    </form>
+
+    <section>
+      <header><span>Request</span><span id="requestMeta"></span></header>
+      <pre><code id="requestCode">Waiting for a quote…</code></pre>
+    </section>
+    <section>
+      <header><span>Response</span><span id="responseMeta"></span></header>
+      <pre><code id="responseCode">Waiting for a quote…</code></pre>
+    </section>
+  </main>
+
+  <script>
+    const TOKENS_URL = "https://test-api.stableflow.ai/v1/pay/tokens";
+    const ONECLICK_TOKENS_URL = "https://1click.chaindefuser.com/v0/tokens";
+    const QUOTE_URL = "https://test-api.stableflow.ai/v1/nearintents/quote";
+    const STORAGE_KEY = "near-intents-liquidity-test.v1";
+    const QUOTE_DEADLINE_MS = 10 * 60 * 1000;
+
+    const els = {
+      form: document.getElementById("form"),
+      fromToken: document.getElementById("fromToken"),
+      toToken: document.getElementById("toToken"),
+      fromAsset: document.getElementById("fromAsset"),
+      toAsset: document.getElementById("toAsset"),
+      amount: document.getElementById("amount"),
+      slippage: document.getElementById("slippage"),
+      recipient: document.getElementById("recipient"),
+      refundTo: document.getElementById("refundTo"),
+      dry: document.getElementById("dry"),
+      submit: document.getElementById("submit"),
+      swap: document.getElementById("swap"),
+      status: document.getElementById("status"),
+      requestCode: document.getElementById("requestCode"),
+      responseCode: document.getElementById("responseCode"),
+      requestMeta: document.getElementById("requestMeta"),
+      responseMeta: document.getElementById("responseMeta"),
+    };
+
+    /** @type {Array<{key: string, symbol: string, network: string, decimals: number, contract_address: string, assetId: string, support_payment: boolean, support_receive: boolean}>} */
+    let tokens = [];
+
+    function tokenKey(token) {
+      return [token.network, token.symbol, token.contract_address || ""].join(":");
+    }
+
+    function loadPrefs() {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function savePrefs() {
+      const prefs = {
+        fromKey: els.fromToken.value,
+        toKey: els.toToken.value,
+        recipient: els.recipient.value.trim(),
+        refundTo: els.refundTo.value.trim(),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    }
+
+    function setStatus(message, kind) {
+      els.status.textContent = message || "";
+      els.status.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function pretty(value) {
+      return JSON.stringify(value, null, 2);
+    }
+
+    function toMinorUnits(amount, decimals) {
+      const raw = String(amount ?? "").trim();
+      if (!raw) throw new Error("Amount is required");
+      if (!/^\d+(\.\d+)?$/.test(raw)) throw new Error("Amount must be a positive decimal");
+      const [whole, frac = ""] = raw.split(".");
+      if (frac.length > decimals) {
+        throw new Error("Amount has more than " + decimals + " decimals");
+      }
+      const combined = (whole + frac.padEnd(decimals, "0")).replace(/^0+/, "") || "0";
+      if (combined === "0") throw new Error("Amount must be greater than 0");
+      return combined;
+    }
+
+    function findToken(key) {
+      return tokens.find((token) => token.key === key) || null;
+    }
+
+    function optionLabel(token) {
+      return token.symbol + " (" + token.network + ")";
+    }
+
+    function fillSelect(select, list, preferredKey) {
+      select.innerHTML = "";
+      for (const token of list) {
+        const option = document.createElement("option");
+        option.value = token.key;
+        option.textContent = optionLabel(token);
+        select.appendChild(option);
+      }
+      if (preferredKey && list.some((token) => token.key === preferredKey)) {
+        select.value = preferredKey;
+      }
+    }
+
+    function updateAssetHints() {
+      const from = findToken(els.fromToken.value);
+      const to = findToken(els.toToken.value);
+      els.fromAsset.textContent = from ? from.assetId : "";
+      els.toAsset.textContent = to ? to.assetId : "";
+      els.fromAsset.title = from ? from.assetId : "";
+      els.toAsset.title = to ? to.assetId : "";
+    }
+
+    function matchAssetId(payToken, oneclickTokens) {
+      const network = String(payToken.network || "").toLowerCase();
+      const contract = String(payToken.contract_address || "").toLowerCase();
+      const hit = oneclickTokens.find((token) => {
+        const blockchain = String(token.blockchain || "").toLowerCase();
+        const address = String(token.contractAddress || "").toLowerCase();
+        return blockchain === network && address === contract;
+      });
+      if (hit?.assetId) return hit.assetId;
+      if (network === "near" && contract) return "nep141:" + payToken.contract_address;
+      if (!contract) return "nep141:" + network + ".omft.near";
+      if (contract.startsWith("0x")) {
+        return "nep141:" + network + "-" + contract + ".omft.near";
+      }
+      return "nep141:" + network + "-" + payToken.contract_address + ".omft.near";
+    }
+
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      let payload = null;
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = text;
+        }
+      }
+      return { ok: res.ok, status: res.status, payload };
+    }
+
+    async function loadTokens() {
+      setStatus("Loading tokens…");
+      const [payRes, oneRes] = await Promise.all([
+        fetchJson(TOKENS_URL),
+        fetchJson(ONECLICK_TOKENS_URL),
+      ]);
+      if (!payRes.ok || payRes.payload?.code !== 200 || !Array.isArray(payRes.payload?.data)) {
+        throw new Error(
+          payRes.payload?.message || "Failed to load StableFlow tokens (" + payRes.status + ")",
+        );
+      }
+      const oneclickTokens = Array.isArray(oneRes.payload) ? oneRes.payload : [];
+      tokens = payRes.payload.data.map((item) => ({
+        key: tokenKey(item),
+        symbol: item.symbol,
+        network: item.network,
+        decimals: Number(item.decimals),
+        contract_address: item.contract_address || "",
+        support_payment: Boolean(item.support_payment),
+        support_receive: Boolean(item.support_receive),
+        assetId: matchAssetId(item, oneclickTokens),
+      }));
+      const prefs = loadPrefs();
+      fillSelect(
+        els.fromToken,
+        tokens.filter((token) => token.support_payment),
+        prefs.fromKey,
+      );
+      fillSelect(
+        els.toToken,
+        tokens.filter((token) => token.support_receive),
+        prefs.toKey,
+      );
+      if (prefs.recipient) els.recipient.value = prefs.recipient;
+      if (prefs.refundTo) els.refundTo.value = prefs.refundTo;
+      updateAssetHints();
+      savePrefs();
+      setStatus("Loaded " + tokens.length + " tokens.", "ok");
+    }
+
+    function buildQuoteBody() {
+      const from = findToken(els.fromToken.value);
+      const to = findToken(els.toToken.value);
+      if (!from || !to) throw new Error("Select from and to tokens");
+      const recipient = els.recipient.value.trim();
+      const refundTo = els.refundTo.value.trim();
+      if (!recipient) throw new Error("Recipient is required");
+      if (!refundTo) throw new Error("Refund address is required");
+      const slippage = Number(els.slippage.value);
+      if (!Number.isFinite(slippage) || slippage < 0) throw new Error("Slippage must be >= 0");
+      return {
+        dry: els.dry.checked,
+        swapType: "EXACT_OUTPUT",
+        slippageTolerance: slippage,
+        originAsset: from.assetId,
+        depositType: "ORIGIN_CHAIN",
+        destinationAsset: to.assetId,
+        amount: toMinorUnits(els.amount.value, from.decimals),
+        refundTo,
+        refundType: "ORIGIN_CHAIN",
+        recipient,
+        recipientType: "DESTINATION_CHAIN",
+        deadline: new Date(Date.now() + QUOTE_DEADLINE_MS).toISOString(),
+        confidentiality: "advanced",
+      };
+    }
+
+    async function requestQuote(event) {
+      event.preventDefault();
+      savePrefs();
+      let body;
+      try {
+        body = buildQuoteBody();
+      } catch (error) {
+        setStatus(error.message, "err");
+        return;
+      }
+      els.requestMeta.textContent = "POST " + QUOTE_URL;
+      els.requestCode.textContent = pretty(body);
+      els.responseCode.textContent = "Requesting…";
+      els.responseMeta.textContent = "";
+      els.submit.disabled = true;
+      setStatus("Requesting quote…");
+      try {
+        const result = await fetchJson(QUOTE_URL, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        els.responseMeta.textContent = "HTTP " + result.status;
+        els.responseCode.textContent = pretty(result.payload);
+        if (!result.ok) {
+          const message =
+            (result.payload && result.payload.message) ||
+            "Quote failed (" + result.status + ")";
+          setStatus(message, "err");
+          return;
+        }
+        const out = result.payload?.quote?.amountOutFormatted;
+        const usd = result.payload?.quote?.amountOutUsd;
+        setStatus(
+          out ? "Quoted " + out + (usd ? " (~$" + usd + ")" : "") : "Quote returned.",
+          "ok",
+        );
+      } catch (error) {
+        els.responseCode.textContent = pretty({ error: error.message || String(error) });
+        setStatus(error.message || "Network error", "err");
+      } finally {
+        els.submit.disabled = false;
+      }
+    }
+
+    els.form.addEventListener("submit", requestQuote);
+    els.fromToken.addEventListener("change", () => {
+      updateAssetHints();
+      savePrefs();
+    });
+    els.toToken.addEventListener("change", () => {
+      updateAssetHints();
+      savePrefs();
+    });
+    els.recipient.addEventListener("change", savePrefs);
+    els.refundTo.addEventListener("change", savePrefs);
+    els.recipient.addEventListener("blur", savePrefs);
+    els.refundTo.addEventListener("blur", savePrefs);
+    els.swap.addEventListener("click", () => {
+      const fromKey = els.fromToken.value;
+      const toKey = els.toToken.value;
+      if ([...els.fromToken.options].some((option) => option.value === toKey)) {
+        els.fromToken.value = toKey;
+      }
+      if ([...els.toToken.options].some((option) => option.value === fromKey)) {
+        els.toToken.value = fromKey;
+      }
+      updateAssetHints();
+      savePrefs();
+    });
+
+    loadTokens().catch((error) => {
+      setStatus(error.message || "Failed to load tokens", "err");
+    });
+  </script>
+</body>
+
+</html>
