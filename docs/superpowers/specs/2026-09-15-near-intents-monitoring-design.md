@@ -32,6 +32,10 @@
 | 8 | 单次报价延迟 0.8–3.2s | 1 分钟一轮、几十对币对，3–5 并发足够 |
 | 9 | StableFlow 列表 45 个 token / 15 条链，`support_payment` 与 `support_receive` 均为 45 | 全量矩阵 2025 对，太大；白名单是合理选择 |
 | 10 | 45 个 token **全部**能在 1click token 列表匹配出 `assetId`，HTML 里那套 fallback 拼接规则实测一条都没命中 | 保留 fallback 作兜底，但解析失败必须启动即报错 |
+| 11 | 部分目标链有**最低额限制**，返回 400 `Temporary swap limits: minimum swap amount is $1,000`。实测 `pol:USDC` 在 1 USDC 时被拒、1500 USDC 通过 | 稳定币默认金额取 1500，越过最低额门槛；同时给它一个独立的错误码 |
+| 12 | `near:USDC → bsc:USDC` 在 100 / 1500 / 5000 / 20000 USDC **均**返回上条的最低额错误，而反方向 `bsc:USDC → near:USDC` 正常 | 这是对方侧的限额状态，不是我们配置错了。监控必须如实报红 |
+| 13 | `near:USDC → tron:USDT` 返回 400 `Internal server error`（与金额无关） | 同上，是观测到的真实故障，不当作 flaky 重试掩盖 |
+| 14 | 实测 1500 USDC 在 eth / sol / arb / base / gnosis 双向均通过，未触发上限 | 默认 1500 是经过验证的取值，不是拍的 |
 
 ## 3. 方案选择
 
@@ -102,7 +106,7 @@ nearintents_monitoring/
 | `http_status`, `latency_ms` | |
 | `amount_in`, `amount_out`, `amount_in_usd`, `amount_out_usd` | 字符串原样存，避免精度损失 |
 | `min_amount_in`, `min_amount_out`, `time_estimate`, `correlation_id` | |
-| `error_code` | `http_4xx` / `http_5xx` / `timeout` / `network` / `bad_shape` |
+| `error_code` | `http_4xx` / `http_5xx` / `timeout` / `network` / `bad_shape` / `limits` |
 | `error_message` | 截断到 500 字符 |
 
 索引：`(pair_id, ts)`、`(ts)`。
@@ -200,7 +204,7 @@ HTTP 400 — tokenOut is not valid
     "confidentiality": "advanced",
     "deadlineMs": 600000
   },
-  "defaultAmounts": { "USDC": "100", "USDT": "100", "DAI": "100",
+  "defaultAmounts": { "USDC": "1500", "USDT": "1500", "DAI": "1500",
                       "ETH": "0.05", "WETH": "0.05", "SOL": "1",
                       "BNB": "0.1", "AVAX": "5", "POL": "100",
                       "TRX": "100", "ZEC": "0.5" },
@@ -219,6 +223,7 @@ HTTP 400 — tokenOut is not valid
 
 - 白名单用 `network:symbol` 表达人类可读的币对，assetId 由脚本解析——**配置里不出现 assetId**，避免手工维护 64 位哈希
 - `amount` 缺省时按 `defaultAmounts[目标 token 的 symbol]` 取，再缺省则用 `"1"`
+- 稳定币默认 1500 是实测选定的：低于这个值会被若干目标链的 `$1,000` 最低额限制拒掉（见 §2 #11），高于它又还没碰到上限（§2 #14）。若将来出现最高额限制，用**每对币对的 `amount` 覆盖**来调，不改全局默认
 - `retention.hourlyDays: 0` 表示小时聚合永久保留
 - 每链的哑地址由脚本内置一份合法默认表（EVM 用 checksummed 真实地址），`addresses` 可覆盖
 - 缺失的目标链地址视为**配置错误，启动即失败**，不猜
@@ -233,6 +238,8 @@ HTTP 400 — tokenOut is not valid
 - **代表性跨链走廊（双向，6 对）**：`eth:USDC ↔ sol:USDC`、`eth:USDC ↔ base:USDC`（L2 路径）、`bsc:USDT ↔ tron:USDT`（CEX 走廊）
 
 这是「能立刻跑起来、覆盖所有链、成本可控」的起点，不是终态。要扩到全量 2025 对只需改 `config.json`。
+
+**首次运行的预期**：因为默认金额 1500 已越过所有已知最低额限制，绝大多数币对应为绿。但按 §2 #12 / #13，`→ bsc:USDC` 与 `→ tron:USDT` 会报红——这是对方侧的�限额与故障状态，不是配置错误。验收标准是「监控如实记录了真实状态」，不是「全部变绿」。
 
 ## 11. 部署
 
@@ -253,6 +260,7 @@ HTTP 400 — tokenOut is not valid
 - `config`：默认值填充、缺地址报错、环境变量覆盖、`defaultAmounts` 回退
 - 金额换算：`1` → `1000000`（6 位）、`0.05` → `50000000000000000`（18 位）、小数位超限报错、`EXACT_OUTPUT` 用**目标** decimals（回归测试，锁住 HTML 那个 bug 不会回来）
 - `detect`：全部状态迁移（ok→error、error→ok、ok→deviant、抖动抑制、样本不足不判），以及 `EXACT_INPUT` 币对改用 `amountOut` 作为偏离指标
+- `quote` 错误归类：把包含 `swap limits` 的 400 归为 `limits` 而不是泛化的 `http_4xx`
 - `store`：建表幂等、写入-查询往返、小时聚合幂等性、保留策略边界（14 天前删、当天留）
 - `notify`：边沿抑制（首次发、`realertMinutes` 内不发、超过后重发、恢复必发）、日汇总的 `last_digest_ts` 去重、`--no-notify` 不真发
 
@@ -267,6 +275,8 @@ HTTP 400 — tokenOut is not valid
 | 风险 | 处理 |
 |------|------|
 | 对方无文档说明限流策略 | 并发默认 5、1 分钟间隔，实测每请求 0.8–3.2s，量级很小。遇到 429 时记录错误码并在日志里显式提示，后续按需加退避 |
+| 最低额/最高额限制会随流动性变化，而它们和「路由断了」都是 4xx | 给它们单独的 `limits` 错误码。这样从 `/stats` 就能分辨「我们金额配置得不合适」与「这条路由真的挂了」；默认 1500 已越过当前所有已知最低额 |
+| 部分目标链当前就是坏的（`bsc:USDC`、`tron:USDT`） | 不为此加特例、不重试掩盖。首次运行就会报红，这是监控的预期输出而非缺陷 |
 | `test-api.stableflow.ai` 是测试环境，可能变更或下线 | 端点全部在 `config.json` 里，且有 `quoteEndpoint` 与 `tokensSources` 两个可替换入口；`/health` 会暴露连续失败，能在宕机早期发现 |
 | 报价接口的 rate limit / 稳定性是黑盒 | 硬失败与价格偏移分开记录，失败率趋势可从 `/stats` 看出 |
 | SQLite 单写者 | 单实例部署，已在上文说明 |
