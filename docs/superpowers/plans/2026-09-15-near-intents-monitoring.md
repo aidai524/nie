@@ -2131,7 +2131,8 @@ test("pruneRaw 只删窗口之前的数据", () => {
     row("2026-09-14T00:00:00.000Z"),
     row("2026-09-15T00:00:00.000Z"),
   ]);
-  assert.equal(store.pruneRaw("2026-09-14T12:00:00.000Z"), 1);
+  // cutoff 取整点：ts < cutoff 的删掉，等于或晚于的留下
+  assert.equal(store.pruneRaw("2026-09-14T00:00:00.000Z"), 1);
   assert.deepEqual(store.getHistory({}).map((q) => q.ts),
     ["2026-09-15T00:00:00.000Z", "2026-09-14T00:00:00.000Z"]);
   store.close();
