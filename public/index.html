@@ -27,6 +27,9 @@
       --color-body: #cccccc;
       --color-body-strong: #e6e6e6;
       --color-muted: #888888;
+      /* 规范里有 muted-soft，但它在我们的表面上不达 AA（canvas 上 2.87、surface-card 上 2.52），
+         所以本页不用它承载任何信息性文字。留在这里是为了标明它是规范令牌、
+         而不是漏掉了 —— 别拿它去写正文或提示。 */
       --color-muted-soft: #5a5a5a;
       --color-on-primary: #0a0a0a;
       /* colors —— 语义。规范把这三个明确留给「产品 UI 的状态指示」，
@@ -177,7 +180,7 @@
 
     .status-row .warn { color: var(--color-warning); }
 
-    .hint { color: var(--color-muted-soft); font-size: var(--type-caption-size); }
+    .hint { color: var(--color-muted); font-size: var(--type-caption-size); }
 
     /* ---------- 按钮（component: button-primary / button-secondary） ----------
        规范：主按钮黄底黑字、8px 圆角、40px 高、14/600；黄色只给主操作。 */
@@ -340,7 +343,7 @@
 
     td.pair { color: var(--color-on-dark); }
     td.usd, td.time { color: var(--color-muted); }
-    td.dev.muted { color: var(--color-muted-soft); }
+    td.dev.muted { color: var(--color-muted); }
     td.latency.warn { color: var(--color-warning); }
     td.note { font-size: var(--type-caption-size); color: var(--color-muted); }
     td.note.err { color: var(--color-error); }
@@ -348,7 +351,9 @@
 
     /* 可点行：规范未定义 hover，这里只用 surface-elevated（规范里的「嵌套/按下」层） */
     tr.row.clickable { cursor: pointer; }
-    tr.row.clickable:hover { background: var(--color-surface-elevated); }
+    /* 悬停/按下用更暗的表面：规范自己的 active 态就是转暗（primary-active 比 primary 暗），
+       而换成更亮的 surface-elevated 会让次要文字与失败色跌破 AA 对比度。 */
+    tr.row.clickable:hover { background: var(--color-surface-soft); }
 
     /* 状态小徽章（component: badge-pill；规范允许小徽章用 pill 圆角，
        并把 green/amber/red 明确留给产品 UI 的状态指示） */
@@ -372,7 +377,7 @@
     /* ---------- 展开详情（推导）：规范说 surface-elevated 是「大卡内嵌套的小卡」 ---------- */
     tr.detail td {
       padding: var(--spacing-sm) var(--spacing-md);
-      background: var(--color-surface-elevated);
+      background: var(--color-surface-soft);   /* 同上：更暗的表面才让详情文字达 AA */
       color: var(--color-muted);
       font-family: var(--font-mono);
       font-size: var(--type-caption-size);
