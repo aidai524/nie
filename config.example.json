@@ -1,0 +1,93 @@
+{
+  "intervalSec": 60,
+  "concurrency": 5,
+  "requestTimeoutMs": 15000,
+  "quoteEndpoint": "https://test-api.stableflow.ai/v1/nearintents/quote",
+  "tokensSources": {
+    "stableflow": "https://test-api.stableflow.ai/v1/pay/tokens",
+    "oneclick": "https://1click.chaindefuser.com/v0/tokens"
+  },
+  "defaults": {
+    "swapType": "EXACT_OUTPUT",
+    "slippageTolerance": 10,
+    "confidentiality": "advanced",
+    "deadlineMs": 600000
+  },
+  "defaultAmounts": {
+    "USDC": "1500", "USDT": "1500", "DAI": "1500",
+    "ETH": "0.05", "WETH": "0.05", "SOL": "1",
+    "BNB": "0.1", "AVAX": "5", "POL": "100", "TRX": "100", "ZEC": "0.5"
+  },
+  "addresses": {
+    "near": "monitor.near",
+    "eth": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "arb": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "base": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "op": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "pol": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "bsc": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "avax": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "gnosis": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "bera": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "xlayer": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "scroll": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "sol": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    "tron": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "zec": "t1a2VZ5kXqJxQz8kQyYvXqZ9mNnR4pLqDk3"
+  },
+  "pairs": [
+    { "from": "near:USDC", "to": "eth:USDC" },
+    { "from": "eth:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "sol:USDC" },
+    { "from": "sol:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "bsc:USDC" },
+    { "from": "bsc:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "tron:USDT" },
+    { "from": "tron:USDT", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "avax:USDC" },
+    { "from": "avax:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "arb:USDC" },
+    { "from": "arb:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "base:USDC" },
+    { "from": "base:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "gnosis:USDC" },
+    { "from": "gnosis:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "pol:USDC" },
+    { "from": "pol:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "op:USDC" },
+    { "from": "op:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "bera:USDT" },
+    { "from": "bera:USDT", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "xlayer:USDC" },
+    { "from": "xlayer:USDC", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "scroll:USDT" },
+    { "from": "scroll:USDT", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "zec:ZEC" },
+    { "from": "zec:ZEC", "to": "near:USDC" },
+    { "from": "near:USDT", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "near:USDT" },
+    { "from": "near:ETH", "to": "near:USDC" },
+    { "from": "near:USDC", "to": "near:ETH" },
+    { "from": "eth:USDC", "to": "sol:USDC" },
+    { "from": "sol:USDC", "to": "eth:USDC" },
+    { "from": "eth:USDC", "to": "base:USDC" },
+    { "from": "base:USDC", "to": "eth:USDC" },
+    { "from": "bsc:USDT", "to": "tron:USDT" },
+    { "from": "tron:USDT", "to": "bsc:USDT" }
+  ],
+  "detect": {
+    "priceDeviationPct": 10,
+    "minSamples": 5,
+    "realertMinutes": 30,
+    "rollingWindowMinutes": 60
+  },
+  "slack": {
+    "enabled": true,
+    "webhookUrl": "",
+    "mention": "",
+    "timeoutMs": 10000,
+    "digest": { "enabled": true, "hourLocal": 9 }
+  },
+  "retention": { "rawDays": 14, "hourlyDays": 0 },
+  "server": { "host": "127.0.0.1", "port": 8787, "cors": "*", "bearerToken": "" }
+}

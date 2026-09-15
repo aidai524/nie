@@ -98,7 +98,7 @@ nearintents_monitoring/
 ```js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, mergeDeep, ConfigError } from "../src/config.js";
+import { loadConfig, mergeDeep, ConfigError, DEFAULT_CONFIG } from "../src/config.js";
 
 const read = (obj) => () => JSON.stringify(obj);
 // 默认关掉 slack，否则每个用例都要编一个 webhook URL
@@ -204,6 +204,31 @@ test("mergeDeep 不改动入参", () => {
   assert.deepEqual(out, { a: { b: 1, c: 2 }, list: [3] });
   assert.notEqual(out.list, base.list);
 });
+
+test("配置里省略某个段时，它与 base 不能是同一个对象引用", () => {
+  const base = { slack: { webhookUrl: "" }, pairs: [] };
+  const out = mergeDeep(base, { pairs: [1] });
+  assert.notEqual(out.slack, base.slack, "省略的段也必须深拷贝，否则会被写穿");
+  out.slack.webhookUrl = "mutated";
+  assert.equal(base.slack.webhookUrl, "", "写 out 不能影响 base");
+});
+
+test("环境变量覆盖不会污染 DEFAULT_CONFIG（模块级状态泄漏回归）", () => {
+  const before = DEFAULT_CONFIG.slack.webhookUrl;
+  // 注意：这里直接调 loadConfig 而不走 load 助手，因为助手会注入 slack 段，
+  // 而这条用例要考的正是「配置里完全没有 slack 段」的路径
+  loadConfig({
+    file: "config.json",
+    env: { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/leaked" },
+    readFile: read(ONE_PAIR),
+  });
+  assert.equal(DEFAULT_CONFIG.slack.webhookUrl, before, "DEFAULT_CONFIG 不能被写穿");
+  // 紧接着一次不带环境变量、也不带 slack 段的加载，必须仍然因为缺 webhook 而失败
+  assert.throws(
+    () => loadConfig({ file: "config.json", env: {}, readFile: read(ONE_PAIR) }),
+    (e) => e instanceof ConfigError && e.issues.some((i) => i.includes("webhookUrl")),
+  );
+});
 ```
 
 - [ ] **Step 3: 跑测试确认失败**
@@ -280,14 +305,32 @@ const POSITIVE_DECIMAL = /^\d+(\.\d+)?$/;
 export function mergeDeep(base, override) {
   if (Array.isArray(override)) return override.slice();
   if (override === null || typeof override !== "object") return override;
-  const out = { ...base };
+  const out = {};
+  // 先深拷贝 base 的每一个嵌套值。只写 {...base} 的话，配置里没提到的段
+  // （如整个 slack）会与 DEFAULT_CONFIG 共享同一个对象引用，后续
+  // `merged.slack.webhookUrl = env.SLACK_WEBHOOK_URL` 就写穿了模块默认值，
+  // 同一个进程里第二次 loadConfig 会继承上一次的环境变量。
+  for (const [key, baseValue] of Object.entries(base ?? {})) {
+    out[key] = baseValue !== null && typeof baseValue === "object" ? clonePlain(baseValue) : baseValue;
+  }
   for (const [key, value] of Object.entries(override)) {
     const baseValue = base?.[key];
     const bothPlainObjects =
       value !== null && typeof value === "object" && !Array.isArray(value) &&
       baseValue !== null && typeof baseValue === "object" && !Array.isArray(baseValue);
-    out[key] = bothPlainObjects ? mergeDeep(baseValue, value) : value;
+    out[key] = bothPlainObjects
+      ? mergeDeep(baseValue, value)
+      : (value !== null && typeof value === "object" ? clonePlain(value) : value);
   }
+  return out;
+}
+
+/** 只处理 JSON 能出现的值（对象、数组、基本类型），不处理 Map/Date/函数 */
+function clonePlain(value) {
+  if (Array.isArray(value)) return value.map(clonePlain);
+  if (value === null || typeof value !== "object") return value;
+  const out = {};
+  for (const [key, nested] of Object.entries(value)) out[key] = clonePlain(nested);
   return out;
 }
 
@@ -373,7 +416,10 @@ export function validate(cfg) {
   if (typeof cfg.server?.host !== "string" || cfg.server.host.trim() === "") {
     issues.push("server.host 不能为空字符串");
   }
-  requireInt(issues, "server.port", cfg.server?.port, 1, 65535);
+  // 下端 0，上端 65535。端口 0 在 Node 里是「让内核挑一个空闲端口」的标准写法，
+  // 测试用它就不会与本地正在跑的服务撞端口。main 会把实际绑定的端口打进日志，
+  // 所以配了 0 也不会把人送进一个“日志里写着 8787、其实没人监听”的坑。
+  requireInt(issues, "server.port", cfg.server?.port, 0, 65535);
   if (typeof cfg.server?.cors !== "string") issues.push("server.cors 必须是字符串");
   if (typeof cfg.server?.bearerToken !== "string") issues.push("server.bearerToken 必须是字符串");
 
@@ -407,7 +453,7 @@ export function loadConfig({ file = "config.json", env = process.env, readFile =
 - [ ] **Step 5: 跑测试确认全绿**
 
 Run: `npm test`
-Expected: PASS，13 个用例全过，且**输出里没有 ExperimentalWarning**（证明 `--disable-warning` 生效）
+Expected: PASS，14 个用例全过，且**输出里没有 ExperimentalWarning**（证明 `--disable-warning` 生效）
 
 - [ ] **Step 6: 提交**
 
@@ -726,7 +772,7 @@ const STABLEFLOW = [
 
 const DEFAULTS = { swapType: "EXACT_OUTPUT", slippageTolerance: 10, confidentiality: "advanced", deadlineMs: 600000 };
 const ADDRESSES = { near: "monitor.near", eth: "0xADDR", zec: "t1addr" };
-const DEFAULT_AMOUNTS = { USDC: "1500", ZEC: "0.5" };
+const DEFAULT_AMOUNTS = { USDC: "1500", ZEC: "0.5", ETH: "0.05" };
 
 const build = (pairDefs, overrides = {}) =>
   buildPairs({
@@ -767,10 +813,10 @@ test("resolveAssetId：1click 命中时直接用它的 assetId", () => {
 test("resolveAssetId：未命中时按规则拼接", () => {
   // nearc 上没有 contract 的链
   assert.equal(resolveAssetId({ network: "zec", contract_address: "" }, []), "nep141:zec.omft.near");
-  // 0x 开头的合约
-  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xDEAD.omft.near");
+  // 0x 开头的合约：强制转小写（与真实 assetId 一致）
+  assert.equal(resolveAssetId({ network: "bsc", contract_address: "0xDEAD" }, []), "nep141:bsc-0xdead.omft.near");
   // 非 0x 的非 near 合约
-  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-So1abc.omft.near");
+  assert.equal(resolveAssetId({ network: "sol", contract_address: "So1abc" }, []), "nep141:sol-so1abc.omft.near");
   // near 本身
   assert.equal(resolveAssetId({ network: "near", contract_address: "usdc.near" }, []), "nep141:usdc.near");
 });
@@ -907,8 +953,11 @@ export function resolveAssetId(payToken, oneclickTokens) {
   if (hit?.assetId) return hit.assetId;
   if (network === "near" && contract) return `nep141:${payToken.contract_address}`;
   if (!contract) return `nep141:${network}.omft.near`;
-  if (contract.startsWith("0x")) return `nep141:${network}-${contract}.omft.near`;
-  return `nep141:${network}-${payToken.contract_address}.omft.near`;
+  // 统一小写：实测 1click 的 102 个 EVM 合约 assetId 里 101 个是全小写，
+  // 真实形如 nep141:eth-0xa0b8…eb48.omft.near。之前这里另起一个
+  // `if (contract.startsWith("0x"))` 分支但两条 return 模板完全相同，
+  // 唯一区别是用小写的 contract 还是原值 payToken.contract_address，属于无谓的死分支。
+  return `nep141:${network}-${contract}.omft.near`;
 }
 
 export function normalizeTokens({ stableflow, oneclick }) {
@@ -1406,6 +1455,29 @@ test("getHistory 支持 pairId / 时间窗 / limit 组合", () => {
   store.close();
 });
 
+test("getStats 的 hourly 分支的计数来自小时桶而不是原始表（长窗口在原始数据被清理后才不掉数）", () => {
+  const store = fresh();
+  store.insertQuotes([
+    row(PAIR_A.id, "2026-09-15T00:10:00Z"),// 已聚合进小时桶
+    row(PAIR_A.id, "2026-09-15T01:10:00Z"),// 故意未聚合，只存在于原始表
+  ]);
+  // quotes_hourly 的公开写入接口属于 Task 7；这里直接用 db 造一条桶，专门考「计数从哪个表来」。
+  // 不能用公开 API：那正是这条用例要隔离掉的变量。
+  store.db.prepare(`
+    INSERT INTO quotes_hourly (pair_id, hour, n, ok_n, amount_in_avg, amount_in_min, amount_in_max,
+                               amount_out_avg, amount_out_min, amount_out_max, latency_avg_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(PAIR_A.id, "2026-09-15T00:00:00Z", 1, 1, 1501.5, 1501.5, 1501.5, 1500, 1500, 1500, 1000);
+  const [entry] = store.getStats({ sinceIso: "2026-09-15T00:00:00Z", resolution: "hourly" }).pairs;
+  assert.equal(entry.pairId, PAIR_A.id);
+  assert.equal(entry.n, 1, "只应统计已聚合进小时桶的那一条；从原始表取会得 2");
+  assert.equal(entry.okN, 1);
+  assert.equal(entry.okRate, 1);
+  assert.equal(entry.metric.mean, 1501.5);
+  assert.equal(entry.latency.mean, 1000);
+  store.close();
+});
+
 test("meta JSON 往返，缺失时给 fallback", () => {
   const store = fresh();
   assert.equal(store.getMeta("missing"), undefined);
@@ -1799,11 +1871,6 @@ export class Store {
   }
 
   getStats({ sinceIso, resolution = "raw" }) {
-    const counts = new Map(
-      this.db.prepare("SELECT pair_id, COUNT(*) AS n, SUM(ok) AS ok_n FROM quotes WHERE ts >= ? GROUP BY pair_id")
-        .all(sinceIso)
-        .map((row) => [row.pair_id, { n: row.n, okN: row.ok_n }]),
-    );
     const swapTypes = new Map(this.db.prepare("SELECT id, swap_type FROM pairs").all().map((row) => [row.id, row.swap_type]));
 
     if (resolution === "hourly") {
@@ -1821,12 +1888,16 @@ export class Store {
         const swapType = swapTypes.get(pairId) ?? "EXACT_OUTPUT";
         const useOut = swapType === "EXACT_INPUT";
         const pick = (suffix) => rows.map((row) => row[`amount_${useOut ? "out" : "in"}_${suffix}`]).filter((v) => v !== null);
-        const count = counts.get(pairId) ?? { n: 0, okN: 0 };
+        // 计数必须来自小时桶本身。若从原始 quotes 表取，一旦 pruneRaw 清掉保留期外的原始数据，
+        // 长窗口查询的 n / okN / okRate 就会偏低，而同一响应里的 metric / latency 却来自小时桶
+        // —— 一个响应两个数据源。小时桶永久保留的意义正是让长窗口不掉数。
+        const n = rows.reduce((sum, row) => sum + row.n, 0);
+        const okN = rows.reduce((sum, row) => sum + row.ok_n, 0);
         pairs.push({
           pairId,
-          n: count.n,
-          okN: count.okN,
-          okRate: count.n === 0 ? null : count.okN / count.n,
+          n,
+          okN,
+          okRate: n === 0 ? null : okN / n,
           metric: {
             mean: average(rows.map((row) => row[`amount_${useOut ? "out" : "in"}_avg`])),
             min: min(pick("min")),
@@ -1838,6 +1909,12 @@ export class Store {
       return { resolution, pairs };
     }
 
+    // counts 只在 raw 分支用得到，放到这里避免 hourly 请求白跑一次全表聚合
+    const counts = new Map(
+      this.db.prepare("SELECT pair_id, COUNT(*) AS n, SUM(ok) AS ok_n FROM quotes WHERE ts >= ? GROUP BY pair_id")
+        .all(sinceIso)
+        .map((row) => [row.pair_id, { n: row.n, okN: row.ok_n }]),
+    );
     const grouped = new Map();
     for (const row of this.db.prepare(`
       SELECT q.pair_id, CAST(q.amount_in AS REAL) AS amount_in, CAST(q.amount_out AS REAL) AS amount_out, q.latency_ms
@@ -2014,6 +2091,42 @@ test("rollupHours 覆盖一个区间，且跳过无数据的桶", () => {
   store.close();
 });
 
+test("getStats 的 hourly 分支能读回小时聚合（raw 只覆盖到 24h，7d 靠这条路径）", () => {
+  const store = fresh();
+  store.insertQuotes([
+    row("2026-09-15T00:00:00.000Z", { amountIn: "100", latencyMs: 1000 }),
+    row("2026-09-15T00:30:00.000Z", { amountIn: "300", latencyMs: 3000 }),
+  ]);
+  store.rollupHour("2026-09-15T00:00:00.000Z");
+  const stats = store.getStats({ sinceIso: "2026-09-15T00:00:00.000Z", resolution: "hourly" });
+  assert.equal(stats.resolution, "hourly");
+  const [entry] = stats.pairs;
+  assert.equal(entry.pairId, PAIR.id);
+  assert.equal(entry.n, 2);
+  assert.equal(entry.okN, 2);
+  assert.equal(entry.okRate, 1);
+  assert.equal(entry.metric.mean, 200);
+  assert.equal(entry.metric.min, 100);
+  assert.equal(entry.metric.max, 300);
+  assert.equal(entry.latency.mean, 2000);
+  store.close();
+});
+
+test("getStats 的 hourly 分支的计数来自小时桶而不是原始表（长窗口在原始数据被清理后才不掉数）", () => {
+  const store = fresh();
+  store.insertQuotes([
+    row("2026-09-15T00:10:00.000Z"), // 会被聚合进小时桶
+    row("2026-09-15T01:10:00.000Z"), // 故意不聚合，只存在于原始表
+  ]);
+  store.rollupHour("2026-09-15T00:00:00.000Z");
+  const stats = store.getStats({ sinceIso: "2026-09-15T00:00:00.000Z", resolution: "hourly" });
+  const [entry] = stats.pairs;
+  assert.equal(entry.n, 1, "只应统计已聚合进小时桶的那一条；从原始表取会得 2");
+  assert.equal(entry.okN, 1);
+  assert.equal(entry.okRate, 1);
+  store.close();
+});
+
 test("pruneRaw 只删窗口之前的数据", () => {
   const store = fresh();
   store.insertQuotes([
@@ -2021,7 +2134,8 @@ test("pruneRaw 只删窗口之前的数据", () => {
     row("2026-09-14T00:00:00.000Z"),
     row("2026-09-15T00:00:00.000Z"),
   ]);
-  assert.equal(store.pruneRaw("2026-09-14T12:00:00.000Z"), 1);
+  // cutoff 取整点：ts < cutoff 的删掉，等于或晚于的留下
+  assert.equal(store.pruneRaw("2026-09-14T00:00:00.000Z"), 1);
   assert.deepEqual(store.getHistory({}).map((q) => q.ts),
     ["2026-09-15T00:00:00.000Z", "2026-09-14T00:00:00.000Z"]);
   store.close();
@@ -2153,7 +2267,7 @@ git commit -m "feat: 小时聚合与保留策略，聚合幂等"
   - `priceMetric(quote, swapType): number | null`
   - `evaluate({ quote, history, prevStatus, detect }): { status, metric, baseline, sampleCount, deviationPct, event }`
     - `event` 为 `null` 或 `{ kind: "error"|"deviation"|"recover", isNew: boolean, detail: object }`
-    - **每轮异常都会产出 event**，`isNew` 表示是否为状态迁移。是否真的推送由 `notify` 决定（见 Task 9）
+    - **每轮异常都会产出 event**，`isNew` 表示是否为状态迁移。是否真的推送由 `notify` 决定（见 Task 10）
 
 **关键约定**：`history` 是**本轮写入之前**读出的历史报价，因此基准不含当前样本，不会被自己拉偏。`history` 里 `ok === false` 的行不参与基准。
 
@@ -2699,6 +2813,9 @@ export function parseQuote(payload) {
 export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, now = new Date() } = {}) {
   const ts = now.toISOString();
   const startedAt = Date.now();
+  // HTTP 状态码必须在解析前抢下来：bad_shape 是在 HTTP 201 之后才发现的，
+  // 如果只在 catch 里从 error 取状态码，这种情况会被误记成 null
+  let httpStatus = null;
   try {
     const response = await fetchJson(config.quoteEndpoint, {
       method: "POST",
@@ -2707,9 +2824,10 @@ export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, 
       timeoutMs: timeoutMs ?? config.requestTimeoutMs,
       fetchImpl,
     });
+    httpStatus = response.status;
     return {
       ts, pairId: pair.id, ok: true,
-      httpStatus: response.status, latencyMs: response.latencyMs,
+      httpStatus, latencyMs: response.latencyMs,
       ...parseQuote(response.payload),
       errorCode: null, errorMessage: null,
     };
@@ -2717,7 +2835,7 @@ export async function quotePair(pair, { config, deadline, fetchImpl, timeoutMs, 
     const { errorCode, errorMessage } = classifyError(error);
     return {
       ts, pairId: pair.id, ok: false,
-      httpStatus: error instanceof HttpError ? error.status : null,
+      httpStatus: error instanceof HttpError ? error.status : httpStatus,
       latencyMs: Date.now() - startedAt,
       errorCode, errorMessage,
     };
@@ -2826,8 +2944,12 @@ test("日汇总：只在配置的那个本地小时发", () => {
   assert.equal(decideDigestAction({ enabled: true, lastDigestTs: null, nowIso: LOCAL(10), hourLocal: 9 }), false);
 });
 
-test("日汇总：一天内不重发（重启不会补发一堆）", () => {
-  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -1), nowIso: LOCAL(9, 5), hourLocal: 9 }), false);
+test("日汇总：同一小时内只发一次，且不会漏掉第二天", () => {
+  // 主用途：采集循环每分钟跑一次，若不在窗口内拦截，hourLocal 这一小时内会连发 60 条
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0), nowIso: LOCAL(9, 5), hourLocal: 9 }), false);
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0), nowIso: LOCAL(9, 59), hourLocal: 9 }), false);
+  // 关键的另一侧：20 小时窗口必须短于一天，否则第二天的汇总会被永久拦住（spec §6 要求不漏推）
+  assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -1), nowIso: LOCAL(9, 5), hourLocal: 9 }), true);
   assert.equal(decideDigestAction({ enabled: true, lastDigestTs: LOCAL(9, 0, -2), nowIso: LOCAL(9, 5), hourLocal: 9 }), true);
 });
 
@@ -3067,11 +3189,17 @@ git commit -m "feat: Slack 通知，边沿触发抑制与日汇总"
 - [ ] **Step 1: 写失败测试 `test/server.test.js`**
 
 ```js
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createConnection } from "node:net";
 import { openStore } from "../src/store.js";
 import { createServer } from "../src/server.js";
+
+// 断言失败时测试体走不到最后那句 `await ctx.close()`，监听中的 server 会让事件循环一直活着，
+// 把整个 `npm test` 挂住并掩盖真正的失败。这里给所有建过的 server 上一个兵底收尾。
+const cleanupOnExit = [];
+after(async () => { await Promise.all(cleanupOnExit.splice(0).map((close) => close())); });
 
 const PAIR = {
   id: "near:USDC>eth:USDC", label: "near:USDC → eth:USDC", fromKey: "near:USDC", toKey: "eth:USDC",
@@ -3096,11 +3224,21 @@ async function withServer({ bearerToken = "", health, cors = "*" } = {}, seed = 
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const base = `http://127.0.0.1:${server.address().port}`;
+  let closed = false;
+  const close = async () => {
+    // 幂等：用例自己会关一次，兜底收尾可能又调一次
+    if (closed) return;
+    closed = true;
+    server.close();
+    await once(server, "close");
+    store.close();
+  };
+  cleanupOnExit.push(close);
   return {
     base,
     config,
     async get(path, init) { return fetch(`${base}${path}`, init); },
-    async close() { server.close(); await once(server, "close"); store.close(); },
+    close,
   };
 }
 
@@ -3120,6 +3258,24 @@ test("GET /health 超过 3 倍 intervalSec 未采集时 503", async () => {
   const res = await ctx.get("/health");
   assert.equal(res.status, 503);
   assert.equal((await res.json()).ok, false);
+  await ctx.close();
+});
+
+test("畸形的 Host 头返回 400，而不是把进程带走", async () => {
+  const ctx = await withServer();
+  // fetch 会自己规范化 Host，所以只能回到原始 socket 才能造出非法端口
+  const port = Number(new URL(ctx.base).port);
+  const raw = await new Promise((resolve, reject) => {
+    const socket = createConnection({ host: "127.0.0.1", port }, () => {
+      socket.write("GET /health HTTP/1.1\r\nHost: localhost:99999\r\nConnection: close\r\n\r\n");
+    });
+    let received = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => { received += chunk; });
+    socket.on("end", () => resolve(received));
+    socket.on("error", reject);
+  });
+  assert.match(raw, /^HTTP\/1\.1 400/, "new URL 抛错时必须回 400，而不是变成未捕获异常");
   await ctx.close();
 });
 
@@ -3309,7 +3465,6 @@ function handle({ url, send, store, config, healthSnapshot }) {
 
 export function createServer({ store, config, healthSnapshot = () => ({}), logger = console }) {
   return createHttpServer((request, response) => {
-    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const headers = {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": config.server.cors,
@@ -3320,6 +3475,17 @@ export function createServer({ store, config, healthSnapshot = () => ({}), logge
       response.writeHead(status, headers);
       response.end(JSON.stringify(payload));
     };
+
+    // Host 头是客户端可控且可能畸形的（非法端口、非法字符），new URL 会抛 TypeError。
+    // 这一行原本在 try 之外：抛出去就是未捕获异常，一个畸形请求就能把整个监控进程带走
+    // —— 而「进程是否还活着」正是这个服务要对外上报的东西。所以先解析、失败就回 400。
+    let url;
+    try {
+      url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+    } catch {
+      send(400, { error: "请求 URL 无法解析" });
+      return;
+    }
 
     if (request.method === "OPTIONS") {
       response.writeHead(204, {
@@ -3392,8 +3558,11 @@ git commit -m "feat: 只读 HTTP API，CORS 与可选 Bearer"
 ```js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, createWakeup, createLogger, loadPairs, runRound } from "../src/index.js";
-import { openStore } from "../src/store.js";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseArgs, createWakeup, createLogger, loadPairs, runRound, runMaintenance, main } from "../src/index.js";
+import { hourFloorIso, openStore } from "../src/store.js";
 import { ConfigError } from "../src/config.js";
 
 const PAIR_A = {
@@ -3567,7 +3736,7 @@ test("runRound 连续失败时第二轮被抑制，alerts 仍然落库", async (
   await runRound(ctx);
   ctx.now = T(1);
   const second = await runRound(ctx);
-  assert.equal(second.alertsSent, 0, "三十秒内不重复提醒");
+  assert.equal(second.alertsSent, 0, "T(0) → T(1) 只过了一分钟，仍在 realertMinutes 内");
   assert.equal(sent.length, 2, "只有第一轮发了");
   assert.equal(store.getAlerts({}).length, 4, "两轮各落两条事件，只是没推");
   assert.equal(store.getPairStates().get(PAIR_A.id).consecutiveFailures, 2);
@@ -3649,6 +3818,214 @@ test("runRound 更新 metrics 供 /health 读取", async () => {
   assert.equal(ctx.metrics.lastRoundTs, T(0).toISOString());
   assert.equal(typeof ctx.metrics.lastRoundDurationMs, "number");
   store.close();
+});
+
+test("基准必须取自本轮写入之前，否则本次偏离会被自己抹平（回归）", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: okFetch(100), now: T(0) });
+  // minSamples 降到 1、阈值放到 80%：这样「基准含不含当前样本」会给出截然不同的结论。
+  // 用默认的 minSamples=5 和 10% 是不行的 —— 样本池里多一条 200，中位数仍然是 100，两种顺序都判 deviant。
+  ctx.config = { ...CONFIG, detect: { ...CONFIG.detect, minSamples: 1, priceDeviationPct: 80 } };
+  await runRound(ctx);
+  ctx.fetchImpl = okFetch(200);
+  ctx.now = T(1);
+  const summary = await runRound(ctx);
+  // 正确顺序：基准 = median([100]) = 100，偏离 = +100% > 80% → deviant
+  // 若先写入再读：基准 = median([100, 200]) = 150，偏离 = +33.3% < 80% → 不判
+  assert.equal(summary.deviant, 2, "基准必须先于本轮写入读取");
+  store.close();
+});
+
+const rawRow = (ts, overrides = {}) => ({
+  ts, pairId: PAIR_A.id, ok: true, latencyMs: 1000, amountIn: "100", amountOut: "1500", ...overrides,
+});
+
+// 用本地时间构造 now，因为日汇总的 hourLocal 是本地小时
+const localHour = (hour, minute = 0) => {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date;
+};
+
+const maintenanceCtx = (store, { now, digest, notifier }) => ({
+  store,
+  notifier: notifier ?? { send: async () => ({ ok: true }) },
+  logger: QUIET,
+  now,
+  config: {
+    ...CONFIG,
+    slack: { enabled: true, mention: "", digest },
+    retention: { rawDays: 14, hourlyDays: 0 },
+  },
+});
+
+test("runMaintenance：整点未变时不聚合，但日汇总照常独立评估", async () => {
+  const store = openStore(":memory:");
+  store.upsertPairs([PAIR_A], "2026-09-15T00:00:00.000Z");
+  store.insertQuotes([rawRow("2026-09-15T00:10:00.000Z")]);
+  const now = localHour(9, 5);
+  store.setMeta("rolled_up_to_hour", hourFloorIso(now));
+  const sent = [];
+  await runMaintenance(maintenanceCtx(store, {
+    now,
+    digest: { enabled: true, hourLocal: 9 },
+    notifier: { send: async (text) => { sent.push(text); return { ok: true }; } },
+  }));
+  assert.equal(store.getHistory({ resolution: "hourly" }).length, 0, "整点没变就不该聚合");
+  assert.equal(sent.length, 1, "日汇总不能被整点门控拦住");
+  assert.ok(sent[0].includes("汇总"), "发的应该是汇总消息");
+  assert.equal(store.getMeta("last_digest_ts"), now.toISOString());
+  store.close();
+});
+
+test("runMaintenance：跨过整点时聚合并清理过期原始数据", async () => {
+  const store = openStore(":memory:");
+  store.upsertPairs([PAIR_A], "2026-09-15T00:00:00.000Z");
+  store.insertQuotes([
+    rawRow("2026-08-01T00:10:00.000Z"), // 超过 14 天，应被保留策略清掉
+    rawRow("2026-09-15T00:10:00.000Z"), // 应被聚合成小时桶
+  ]);
+  const now = new Date("2026-09-15T01:05:00.000Z");
+  store.setMeta("rolled_up_to_hour", "2026-09-15T00:00:00.000Z");
+  const sent = [];
+  await runMaintenance(maintenanceCtx(store, {
+    now,
+    digest: { enabled: false, hourLocal: 9 },
+    notifier: { send: async (text) => { sent.push(text); return { ok: true }; } },
+  }));
+  assert.equal(store.getHistory({ resolution: "hourly" }).length, 1, "00 点这一小时应被聚合");
+  assert.equal(store.getMeta("rolled_up_to_hour"), "2026-09-15T01:00:00.000Z");
+  assert.deepEqual(store.getHistory({}).map((q) => q.ts), ["2026-09-15T00:10:00.000Z"], "8 月那条应被清掉");
+  assert.deepEqual(sent, [], "日汇总关掉时不该发");
+  store.close();
+});
+
+const TOKEN_PAYLOAD = {
+  code: 200,
+  data: [
+    { network: "near", symbol: "USDC", decimals: 6, contract_address: "usdc.near", support_payment: true, support_receive: true },
+    { network: "eth", symbol: "USDC", decimals: 6, contract_address: "0xA0b8", support_payment: true, support_receive: true },
+  ],
+};
+
+// fetchImpl 按 URL 分发：两份 token 列表 + 报价端点
+const mainFetch = (quoteImpl) => async (url, init) => {
+  const target = String(url);
+  if (target.includes("pay/tokens")) return { ok: true, status: 200, text: async () => JSON.stringify(TOKEN_PAYLOAD) };
+  if (target.includes("1click")) return { ok: true, status: 200, text: async () => JSON.stringify([]) };
+  return quoteImpl(url, init);
+};
+
+const writeConfig = (dir, overrides = {}) => {
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify({
+    intervalSec: 60,
+    concurrency: 2,
+    requestTimeoutMs: 5000,
+    pairs: [{ from: "near:USDC", to: "eth:USDC" }],
+    addresses: { near: "monitor.near", eth: "0xADDR" },
+    slack: { enabled: false, webhookUrl: "", digest: { enabled: false } },
+    server: { host: "127.0.0.1", port: 0, cors: "*", bearerToken: "" },
+    ...overrides,
+  }));
+  return configPath;
+};
+
+test("main --help 返回 0，且不读配置、不建库、不建目录", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-help-"));
+  const dataPath = join(dir, "nested", "monitor.db");
+  const originalWrite = process.stdout.write;
+  let usage = "";
+  process.stdout.write = (chunk) => { usage += chunk; return true; };
+  let code;
+  try {
+    // 故意指向一个不存在的配置文件：--help 若真的去加载它就会抛 ConfigError
+    code = await main(["--help", "--config", join(dir, "missing.json"), "--data", dataPath], { logger: QUIET });
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  assert.equal(code, 0);
+  assert.ok(usage.includes("--config"), "应把用法打到 stdout");
+  assert.equal(existsSync(join(dir, "nested")), false, "--help 不应建数据目录");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("main --once 跑一轮就退出，并把报价写进库", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-once-"));
+  const configPath = writeConfig(dir);
+  const dataPath = join(dir, "data", "monitor.db");
+  const code = await main(["--once", "--config", configPath, "--data", dataPath], {
+    logger: QUIET,
+    fetchImpl: mainFetch(okFetch(100)),
+  });
+  assert.equal(code, 0);
+  assert.equal(existsSync(dataPath), true, "应把库建在 --data 指定的路径下");
+  const store = openStore(dataPath);
+  assert.equal(store.getHistory({}).length, 1, "一轮应落一条报价");
+  assert.equal(store.getPairStates().get("near:USDC>eth:USDC").status, "ok");
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("main 在一轮全部失败时不崩溃，仍以 0 退出并留下失败记录", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-fail-"));
+  const configPath = writeConfig(dir);
+  const dataPath = join(dir, "monitor.db");
+  const code = await main(["--once", "--config", configPath, "--data", dataPath], {
+    logger: QUIET,
+    fetchImpl: mainFetch(failFetch),
+  });
+  assert.equal(code, 0, "一轮失败不应让进程以异常收场");
+  const store = openStore(dataPath);
+  const [quote] = store.getHistory({});
+  assert.equal(quote.ok, false);
+  assert.equal(quote.errorCode, "http_4xx");
+  assert.equal(store.getPairStates().get("near:USDC>eth:USDC").status, "error");
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const waitFor = async (probe, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = probe();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error("等待超时");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+
+test("main 的 /health 快照带 spec §8 要求的全部字段", async () => {
+  // server.test.js 是拿**自己的 mock 快照**测 server 的，所以真实的快照形状没人钉住。
+  // 这里让主流程真的把 server 起来，打进去看它到底返回什么。
+  const dir = mkdtempSync(join(tmpdir(), "ni-health-"));
+  const configPath = writeConfig(dir);
+  const lines = [];
+  const logger = { info: (message) => lines.push(message), warn: () => {}, error: (message) => lines.push(message) };
+  // 第一轮故意慢 500ms，好在它跑完之前打到 /health
+  const running = main(["--once", "--config", configPath, "--data", join(dir, "monitor.db")], {
+    logger,
+    fetchImpl: mainFetch(async (url, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return okFetch(100)(url, init);
+    }),
+  });
+  // 端口配的是 0，只有从日志里才能知道内核挑了哪个
+  const port = await waitFor(() => {
+    const line = lines.find((entry) => entry.includes("HTTP API 监听"));
+    return line ? Number(line.slice(line.lastIndexOf(":") + 1)) : null;
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/health`);
+  const health = await response.json();
+  // 此刻一轮还没结束，所以 lastRoundTs 为 null、状态是 503 —— 但字段必须齐全，缺字段正是被漏掉的那部分
+  assert.equal(health.ok, false);
+  assert.equal(health.lastRoundTs, null);
+  assert.equal(health.lastRoundAgeMs, null);
+  assert.equal(health.consecutiveRoundErrors, 0);
+  assert.equal(health.lastRoundDurationMs, null);
+  assert.equal(health.pairs, 1);
+  assert.ok("dbBytes" in health, "spec §8 要求 /health 带 dbBytes");
+  assert.equal(await running, 0);
+  rmSync(dir, { recursive: true, force: true });
 });
 ```
 
@@ -3935,18 +4312,30 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     logger,
   });
 
-  const metrics = { startedAt: new Date().toISOString(), lastRoundTs: null, lastRoundDurationMs: null };
+  const metrics = {
+    startedAt: new Date().toISOString(),
+    lastRoundTs: null,
+    lastRoundDurationMs: null,
+    consecutiveRoundErrors: 0,
+  };
+  // spec §8 规定 /health 返回 { ok, lastRoundTs, lastRoundAgeMs, pairs, consecutiveRoundErrors, dbBytes }。
+  // consecutiveRoundErrors 必须把循环里的失败计数接上来：只自增不对外暴露的话，
+  // 运维就无法区分「轮次在报错」和「轮次只是慢」，而 spec §13 把 /health 当作最早期的故障信号。
   const healthSnapshot = () => ({
     startedAt: metrics.startedAt,
     lastRoundTs: metrics.lastRoundTs,
+    lastRoundAgeMs: metrics.lastRoundTs === null ? null : Date.now() - Date.parse(metrics.lastRoundTs),
     lastRoundDurationMs: metrics.lastRoundDurationMs,
+    consecutiveRoundErrors: metrics.consecutiveRoundErrors,
     pairs: pairs.length,
     dbBytes: (() => { try { return statSync(args.dataPath).size; } catch { return null; } })(),
   });
 
   const server = createServer({ store, config, healthSnapshot, logger });
   await new Promise((resolve) => server.listen(config.server.port, config.server.host, resolve));
-  logger.info(`HTTP API 监听 http://${config.server.host}:${config.server.port}`);
+  // 用实际绑定的端口，而不是配置值：配置为 0 时内核会挑一个，
+  // 打配置值会报出一个根本没人监听的地址。
+  logger.info(`HTTP API 监听 http://${config.server.host}:${server.address().port}`);
 
   const wakeup = createWakeup();
   let stopping = false;
@@ -3960,16 +4349,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
   const ctx = { config, pairs, store, notifier, logger, fetchImpl, metrics };
-  let roundErrors = 0;
 
   try {
     do {
       const startedAt = Date.now();
       try {
         await runRound(ctx);
-        roundErrors = 0;
+        metrics.consecutiveRoundErrors = 0;
       } catch (error) {
-        roundErrors += 1;
+        metrics.consecutiveRoundErrors += 1;
         logger.error(`本轮采集失败: ${error?.stack ?? error?.message ?? error}`);
       }
       try {
@@ -4184,6 +4572,11 @@ CMD ["node", "src/index.js", "--config", "/app/config.json", "--data", "/app/dat
 
 内容至少覆盖：项目一句话说明、设计文档与实现计划的链接、快速开始（`cp config.example.json config.json` → 填 Slack URL → `npm run once -- --no-notify`）、`npm test`、部署（systemd 与 Docker 各一段）、API 端点表、`--once` / `--no-notify` / `--config` / `--data` 四个参数、以及「数据文件默认 `data/monitor.db`，已 gitignore；原始数据保留 14 天，之后按小时聚合永久保留」。
 
+还**必须**包含以下两节（它们在首次实战验收后由最终审查要求补上，不是可选项）：
+
+- **「哪些红不是你的问题」**：直说 `error` 状态的币对通常来自对手方状态 —— `No liquidity available`、临时最低额 `limits`、`Internal server error` —— 这些东西数小时内就会变。实测健康安装下就有 5/38 对是红的，所以看到红先去看错误码，不要先怀疑自己的部署。同时写清楚：`recipient is not valid` 才是配置问题（把 `addresses.<chain>` 换成你自己的合法地址后重跑），`limits` 则说明该链最低额高于默认 1500，给那条币对加显式 `"amount"`。
+- **systemd 段要能真的照做**：给出创建目录与放代码的实际命令（`useradd --system --home ...` **不会**创建 home 目录，只写半句会让 `chown` 在干净机器上 ENOENT），并给出写 `/etc/nearintents-monitor/config.json` 与 `env` 文件的步骤。
+
 - [ ] **Step 4: 跑全量测试**
 
 Run: `npm test`
@@ -4203,6 +4596,13 @@ Expected，逐条对照：
 2. `error` 数应为 3 左右，失败明细是全部以 `bsc:USDC` 或 `tron:USDT` 为目标链的币对（配置里共 3 条：`near:USDC → bsc:USDC`、`near:USDC → tron:USDT`、`bsc:USDT → tron:USDT`）。这些是**对方侧当前的真实状态**（`→bsc:USDC` 在任何金额下都返回最低额错误，`→tron:USDT` 返回 `Internal server error`），不是配置问题，不要去“修”。以 `tron:USDT` 为**源**的币对能否走通未探测，实际报错与否都算正常，看错误码判断是不是配置问题。
 3. 如果出现 `recipient is not valid`，说明那条链的哑地址没通过校验。把 `config.json` 里对应 `addresses.<chain>` 换成你自己控制的一个合法地址后重跑。已知 near / 全部 EVM 链 / sol 的默认值已验证通过；tron 与 zec 的默认值未验证。
 4. 如果出现 `limits` 错误码，说明该链的最低额限制高于 1500，给那条币对在 `config.json` 里加 `"amount": "<更大的值>"`。
+
+**验收实测结果（2026-09-15，本计划执行时）**：38 对全部解析成功，`ok=33 / error=5 / deviant=0`，共 1 轮约 14s。
+失败清单为 `near:USDC>tron:USDT`、`tron:USDT>near:USDC`、`bsc:USDT>tron:USDT`、`tron:USDT>bsc:USDT`（均 `Internal server error`）
+与 `near:USDC>xlayer:USDC`（`No liquidity available`）。
+
+**上面第 2 条的预期已被真实网络推翻**：`→bsc:USDC` 在这次验收时已经恢复（最低额错误消失），而 `→xlayer:USDC` 新出现无流动性。
+两者相差只有几个小时 —— 这恰好说明本服务要报的就是这种对手方状态，而不是配置问题。不要把这些红对当成 bug 去“修”。
 
 - [ ] **Step 6: 验收 API**
 
