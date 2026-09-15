@@ -4268,11 +4268,21 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     logger,
   });
 
-  const metrics = { startedAt: new Date().toISOString(), lastRoundTs: null, lastRoundDurationMs: null };
+  const metrics = {
+    startedAt: new Date().toISOString(),
+    lastRoundTs: null,
+    lastRoundDurationMs: null,
+    consecutiveRoundErrors: 0,
+  };
+  // spec §8 规定 /health 返回 { ok, lastRoundTs, lastRoundAgeMs, pairs, consecutiveRoundErrors, dbBytes }。
+  // consecutiveRoundErrors 必须把循环里的失败计数接上来：只自增不对外暴露的话，
+  // 运维就无法区分「轮次在报错」和「轮次只是慢」，而 spec §13 把 /health 当作最早期的故障信号。
   const healthSnapshot = () => ({
     startedAt: metrics.startedAt,
     lastRoundTs: metrics.lastRoundTs,
+    lastRoundAgeMs: metrics.lastRoundTs === null ? null : Date.now() - Date.parse(metrics.lastRoundTs),
     lastRoundDurationMs: metrics.lastRoundDurationMs,
+    consecutiveRoundErrors: metrics.consecutiveRoundErrors,
     pairs: pairs.length,
     dbBytes: (() => { try { return statSync(args.dataPath).size; } catch { return null; } })(),
   });
@@ -4295,16 +4305,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
   const ctx = { config, pairs, store, notifier, logger, fetchImpl, metrics };
-  let roundErrors = 0;
 
   try {
     do {
       const startedAt = Date.now();
       try {
         await runRound(ctx);
-        roundErrors = 0;
+        metrics.consecutiveRoundErrors = 0;
       } catch (error) {
-        roundErrors += 1;
+        metrics.consecutiveRoundErrors += 1;
         logger.error(`本轮采集失败: ${error?.stack ?? error?.message ?? error}`);
       }
       try {
@@ -4518,6 +4527,11 @@ CMD ["node", "src/index.js", "--config", "/app/config.json", "--data", "/app/dat
 - [ ] **Step 3: 写 `README.md`**
 
 内容至少覆盖：项目一句话说明、设计文档与实现计划的链接、快速开始（`cp config.example.json config.json` → 填 Slack URL → `npm run once -- --no-notify`）、`npm test`、部署（systemd 与 Docker 各一段）、API 端点表、`--once` / `--no-notify` / `--config` / `--data` 四个参数、以及「数据文件默认 `data/monitor.db`，已 gitignore；原始数据保留 14 天，之后按小时聚合永久保留」。
+
+还**必须**包含以下两节（它们在首次实战验收后由最终审查要求补上，不是可选项）：
+
+- **「哪些红不是你的问题」**：直说 `error` 状态的币对通常来自对手方状态 —— `No liquidity available`、临时最低额 `limits`、`Internal server error` —— 这些东西数小时内就会变。实测健康安装下就有 5/38 对是红的，所以看到红先去看错误码，不要先怀疑自己的部署。同时写清楚：`recipient is not valid` 才是配置问题（把 `addresses.<chain>` 换成你自己的合法地址后重跑），`limits` 则说明该链最低额高于默认 1500，给那条币对加显式 `"amount"`。
+- **systemd 段要能真的照做**：给出创建目录与放代码的实际命令（`useradd --system --home ...` **不会**创建 home 目录，只写半句会让 `chown` 在干净机器上 ENOENT），并给出写 `/etc/nearintents-monitor/config.json` 与 `env` 文件的步骤。
 
 - [ ] **Step 4: 跑全量测试**
 
