@@ -425,3 +425,47 @@ test("main 在一轮全部失败时不崩溃，仍以 0 退出并留下失败记
   store.close();
   rmSync(dir, { recursive: true, force: true });
 });
+
+const waitFor = async (probe, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = probe();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error("等待超时");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+
+test("main 的 /health 快照带 spec §8 要求的全部字段", async () => {
+  // server.test.js 是拿**自己的 mock 快照**测 server 的，所以真实的快照形状没人钉住。
+  // 这里让主流程真的把 server 起来，打进去看它到底返回什么。
+  const dir = mkdtempSync(join(tmpdir(), "ni-health-"));
+  const configPath = writeConfig(dir);
+  const lines = [];
+  const logger = { info: (message) => lines.push(message), warn: () => {}, error: (message) => lines.push(message) };
+  // 第一轮故意慢 500ms，好在它跑完之前打到 /health
+  const running = main(["--once", "--config", configPath, "--data", join(dir, "monitor.db")], {
+    logger,
+    fetchImpl: mainFetch(async (url, init) => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return okFetch(100)(url, init);
+    }),
+  });
+  // 端口配的是 0，只有从日志里才能知道内核挑了哪个
+  const port = await waitFor(() => {
+    const line = lines.find((entry) => entry.includes("HTTP API 监听"));
+    return line ? Number(line.slice(line.lastIndexOf(":") + 1)) : null;
+  });
+  const response = await fetch(`http://127.0.0.1:${port}/health`);
+  const health = await response.json();
+  // 此刻一轮还没结束，所以 lastRoundTs 为 null、状态是 503 —— 但字段必须齐全，缺字段正是被漏掉的那部分
+  assert.equal(health.ok, false);
+  assert.equal(health.lastRoundTs, null);
+  assert.equal(health.lastRoundAgeMs, null);
+  assert.equal(health.consecutiveRoundErrors, 0);
+  assert.equal(health.lastRoundDurationMs, null);
+  assert.equal(health.pairs, 1);
+  assert.ok("dbBytes" in health, "spec §8 要求 /health 带 dbBytes");
+  assert.equal(await running, 0);
+  rmSync(dir, { recursive: true, force: true });
+});

@@ -50,29 +50,60 @@ npm test
 | `--config <path>` | 配置文件路径（默认 `config.json`） |
 | `--data <path>` | SQLite 文件路径（默认 `data/monitor.db`） |
 
+## 币对报红多数是对方侧状态，不是你的部署坏了
+
+验收实测在**正确安装**上就有 5/38 对报红（`No liquidity available`、`Internal server error`），而且这些状态几小时内就会变化。看到红色币对时先别急着修自己的部署：
+
+- 一条 `error` 状态的币对通常反映的是**对手方**此刻的状态，不是你的安装问题。已观测到的例子：`No liquidity available`（对方暂时没有流动性）、临时性的最低额 `limits`、`Internal server error`（对方侧报错）。这些都会在几小时内自行变化。
+- 看错误码判断归属：
+  - `limits`：该链的最低兑换额高于默认的 1500。给这条币对在 `config.json` 里显式加 `"amount": "<更大的值>"` 即可，不是故障。
+  - `recipient is not valid`：这是真正的**配置**问题——把 `addresses.<chain>` 换成你自己控制的合法地址再重跑。
+- 验收运行本身就是在正确安装上看到若干红色币对，所以红色是「监控如实记录了真实状态」的预期信息，不是需要修的缺陷。
+
 ## 部署
 
 ### systemd
 
-把代码放到 `/opt/nearintents_monitoring`，配置文件放到 `/etc/nearintents-monitor/config.json`，数据目录 `/var/lib/nearintents-monitor/`（目录属主为 `nearintents` 用户）：
+代码目录 `/opt/nearintents_monitoring`（systemd unit 的 `WorkingDirectory`）、配置文件 `/etc/nearintents-monitor/config.json`、数据目录 `/var/lib/nearintents-monitor/`（属主为 `nearintents` 用户）。按顺序执行，每一步都可直接复制：
 
 ```bash
+# 1. 放代码。`useradd --system` 不会替你创建 home 目录，所以先建目录再放代码。
+#    二选一：从本地这份代码拷贝，或从远程仓库克隆。
+sudo mkdir -p /opt/nearintents_monitoring
+sudo cp -r . /opt/nearintents_monitoring
+# sudo git clone <你的仓库地址> /opt/nearintents_monitoring   # clone 会自建目录，勿先 mkdir
+
+# 2. 建系统用户（home 指到代码目录）
 sudo useradd --system --home /opt/nearintents_monitoring nearintents
+
+# 3. 建配置与数据目录，放配置文件
 sudo mkdir -p /etc/nearintents-monitor /var/lib/nearintents-monitor
 sudo cp config.example.json /etc/nearintents-monitor/config.json
-sudo chown -R nearintents:nearintents /opt/nearintents_monitoring /var/lib/nearintents-monitor
 
+# 4. 代码与数据目录归 nearintents
+sudo chown -R nearintents:nearintents /opt/nearintents_monitoring /var/lib/nearintents-monitor
+```
+
+敏感项（Slack webhook、API bearer token）放在 `/etc/nearintents-monitor/env`，权限设 0600：
+
+```bash
+sudo tee /etc/nearintents-monitor/env > /dev/null <<'EOF'
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
+SERVER_BEARER_TOKEN=
+EOF
+sudo chown nearintents:nearintents /etc/nearintents-monitor/env
+sudo chmod 600 /etc/nearintents-monitor/env
+```
+
+安装 unit 并启动：
+
+```bash
 sudo cp deploy/nearintents-monitor.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now nearintents-monitor
 ```
 
-敏感项（Slack webhook、API bearer token）放在 `/etc/nearintents-monitor/env`，权限设 0600：
-
-```
-SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz
-SERVER_BEARER_TOKEN=
-```
+以上路径与 unit 里的配置一一对应：`WorkingDirectory=/opt/nearintents_monitoring`、`--config /etc/nearintents-monitor/config.json`、`--data /var/lib/nearintents-monitor/monitor.db`、`EnvironmentFile=-/etc/nearintents-monitor/env`。
 
 ### Docker
 

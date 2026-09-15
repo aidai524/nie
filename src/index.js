@@ -273,11 +273,21 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     logger,
   });
 
-  const metrics = { startedAt: new Date().toISOString(), lastRoundTs: null, lastRoundDurationMs: null };
+  const metrics = {
+    startedAt: new Date().toISOString(),
+    lastRoundTs: null,
+    lastRoundDurationMs: null,
+    consecutiveRoundErrors: 0,
+  };
+  // spec §8 规定 /health 返回 { ok, lastRoundTs, lastRoundAgeMs, pairs, consecutiveRoundErrors, dbBytes }。
+  // consecutiveRoundErrors 必须把循环里的失败计数接上来：只自增不对外暴露的话，
+  // 运维就无法区分「轮次在报错」和「轮次只是慢」，而 spec §13 把 /health 当作最早期的故障信号。
   const healthSnapshot = () => ({
     startedAt: metrics.startedAt,
     lastRoundTs: metrics.lastRoundTs,
+    lastRoundAgeMs: metrics.lastRoundTs === null ? null : Date.now() - Date.parse(metrics.lastRoundTs),
     lastRoundDurationMs: metrics.lastRoundDurationMs,
+    consecutiveRoundErrors: metrics.consecutiveRoundErrors,
     pairs: pairs.length,
     dbBytes: (() => { try { return statSync(args.dataPath).size; } catch { return null; } })(),
   });
@@ -300,16 +310,15 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   process.on("SIGTERM", () => onSignal("SIGTERM"));
 
   const ctx = { config, pairs, store, notifier, logger, fetchImpl, metrics };
-  let roundErrors = 0;
 
   try {
     do {
       const startedAt = Date.now();
       try {
         await runRound(ctx);
-        roundErrors = 0;
+        metrics.consecutiveRoundErrors = 0;
       } catch (error) {
-        roundErrors += 1;
+        metrics.consecutiveRoundErrors += 1;
         logger.error(`本轮采集失败: ${error?.stack ?? error?.message ?? error}`);
       }
       try {
