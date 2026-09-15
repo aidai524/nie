@@ -236,6 +236,48 @@ function buildRow({ pair, quote, stat, nowIso }) {
   };
 }
 
+/** 档位的人读形式。>= 1e6 用 M，>= 1e3 用 k，否则原数字；小数部分自然剥离。 */
+export function formatTier(tierUsd) {
+  const value = Number(tierUsd);
+  if (!Number.isFinite(value) || value <= 0) return "—";
+  if (value >= 1e6) return `${dropTrailingZero(value / 1e6)}M`;
+  if (value >= 1e3) return `${dropTrailingZero(value / 1e3)}k`;
+  return String(value);
+}
+
+function dropTrailingZero(value) {
+  return String(Number(value.toFixed(2)));
+}
+
+/** 某一对的档位行里，能通过的最大档位。全不通给 null。 */
+export function largestPassingTier(rows) {
+  let largest = null;
+  for (const row of rows) {
+    if (!row || row.ok !== true) continue;
+    if (!Number.isFinite(row.tierUsd)) continue;
+    if (largest === null || row.tierUsd > largest) largest = row.tierUsd;
+  }
+  return largest;
+}
+
+/** 按 pairId 归并最近一次扫描的行。 */
+export function buildDepthIndex(rows) {
+  const grouped = new Map();
+  for (const row of rows) {
+    if (!row || typeof row.pairId !== "string") continue;
+    if (!grouped.has(row.pairId)) grouped.set(row.pairId, []);
+    grouped.get(row.pairId).push(row);
+  }
+  const index = new Map();
+  for (const [pairId, entries] of grouped) {
+    index.set(pairId, {
+      maxTierUsd: largestPassingTier(entries),
+      byTier: new Map(entries.map((entry) => [entry.tierUsd, entry])),
+    });
+  }
+  return index;
+}
+
 export function buildRows({ pairs = [], latest = [], stats = [], nowIso }) {
   const latestByPair = new Map(latest.map((entry) => [entry.pairId, entry]));
   const statsByPair = new Map(stats.map((entry) => [entry.pairId, entry]));
