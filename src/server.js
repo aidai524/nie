@@ -68,6 +68,17 @@ function handle({ url, send, store, config, healthSnapshot }) {
       send(200, { window, since: sinceIso, ...store.getStats({ sinceIso, resolution }) });
       return;
     }
+case "/depth": {
+      const sweep = store.getLatestSweep();
+      const pairId = query.get("pair");
+      send(200, {
+        enabled: config.depth.enabled,
+        ts: sweep.ts,
+        tiers: config.depth.tiers,
+        rows: pairId ? sweep.rows.filter((row) => row.pairId === pairId) : sweep.rows,
+      });
+      return;
+    }
     case "/alerts":
       send(200, {
         alerts: store.getAlerts({

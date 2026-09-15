@@ -20,11 +20,11 @@ const row = (ts, overrides = {}) => ({
   amountIn: "1501.5", amountOut: "1500", ...overrides,
 });
 
-async function withServer({ bearerToken = "", health, cors = "*" } = {}, seed = () => {}) {
+async function withServer({ bearerToken = "", health, cors = "*", depth = { enabled: false, tiers: [] } } = {}, seed = () => {}) {
   const store = openStore(":memory:");
   store.upsertPairs([PAIR], "2026-09-15T00:00:00Z");
   seed(store);
-  const config = { intervalSec: 60, server: { host: "127.0.0.1", port: 0, cors, bearerToken } };
+  const config = { intervalSec: 60, depth, server: { host: "127.0.0.1", port: 0, cors, bearerToken } };
   const server = createServer({
     store, config,
     healthSnapshot: health ?? (() => ({ startedAt: "2026-09-15T00:00:00.000Z", lastRoundTs: new Date().toISOString(), lastRoundDurationMs: 1200, consecutiveRoundErrors: 0, pairs: 1 })),
@@ -249,3 +249,58 @@ test("静态文件响应也带 CORS 头", async () => {
   await ctx.close();
 });
 
+
+test("GET /depth 返回最近一次扫描的全部行与档位表", async () => {
+  const ctx = await withServer({ depth: { enabled: true, tiers: [100, 1000, 10000] } }, (store) => {
+    store.insertDepthQuotes([
+      { ts: "2026-09-15T00:00:00.000Z", pairId: PAIR.id, tierUsd: 100, ok: true, httpStatus: 201, latencyMs: 1300, amountInUsd: "100.41", amountOutUsd: "100.00" },
+      { ts: "2026-09-15T00:00:00.000Z", pairId: PAIR.id, tierUsd: 1000, ok: false, httpStatus: 400, errorCode: "http_4xx", errorMessage: "No liquidity available" },
+    ]);
+  });
+  const body = await (await ctx.get("/depth")).json();
+  assert.equal(body.enabled, true);
+  assert.equal(body.ts, "2026-09-15T00:00:00.000Z");
+  assert.deepEqual(body.tiers, [100, 1000, 10000]);
+  assert.equal(body.rows.length, 2);
+  assert.equal(body.rows[0].tierUsd, 100);
+  assert.equal(body.rows[1].errorMessage, "No liquidity available");
+  await ctx.close();
+});
+
+test("GET /depth 在没有扫描数据时返回 ts: null 而不是 404（没扫过是正常状态）", async () => {
+  const ctx = await withServer({ depth: { enabled: true, tiers: [100] } });
+  const res = await ctx.get("/depth");
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ts, null);
+  assert.deepEqual(body.rows, []);
+  assert.equal(body.enabled, true);
+  await ctx.close();
+});
+
+test("GET /depth 反映 depth.enabled，让页面能区分「关了」与「还没扫过」", async () => {
+  const ctx = await withServer({ depth: { enabled: false, tiers: [100] } });
+  const body = await (await ctx.get("/depth")).json();
+  assert.equal(body.enabled, false);
+  assert.equal(body.ts, null);
+  await ctx.close();
+});
+
+test("GET /depth?pair= 过滤到单个币对", async () => {
+  const ctx = await withServer({ depth: { enabled: true, tiers: [100] } }, (store) => {
+    store.insertDepthQuotes([
+      { ts: "2026-09-15T00:00:00.000Z", pairId: PAIR.id, tierUsd: 100, ok: true },
+      { ts: "2026-09-15T00:00:00.000Z", pairId: "near:USDC>sol:USDC", tierUsd: 100, ok: false, errorCode: "http_4xx" },
+    ]);
+  });
+  const body = await (await ctx.get(`/depth?pair=${encodeURIComponent(PAIR.id)}`)).json();
+  assert.equal(body.rows.length, 1);
+  assert.equal(body.rows[0].pairId, PAIR.id);
+  await ctx.close();
+});
+
+test("GET /depth 也要令牌（与其它数据端点一致）", async () => {
+  const ctx = await withServer({ bearerToken: "s3cret", depth: { enabled: true, tiers: [100] } });
+  assert.equal((await ctx.get("/depth")).status, 401);
+  await ctx.close();
+});
