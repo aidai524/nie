@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatTier, largestPassingTier, buildDepthIndex } from "../public/dashboard.js";
+import { formatTier, largestPassingTier, buildDepthIndex, buildRows, depthCell, depthCurveFor } from "../public/dashboard.js";
 
 test("formatTier 覆盖 1M / 2.5M / 100k / 1.5k / 100", () => {
   assert.equal(formatTier(1000000), "1M");
@@ -58,4 +58,94 @@ test("buildDepthIndex 按币对归并，并给出每对的详情", () => {
 test("buildDepthIndex 对空输入与坏行不崩", () => {
   assert.equal(buildDepthIndex([]).size, 0);
   assert.equal(buildDepthIndex([null, { noPairId: 1 }]).size, 0);
+});
+
+const PAIR_A = {
+  id: "near:USDC>eth:USDC", label: "near:USDC → eth:USDC", fromKey: "near:USDC", toKey: "eth:USDC",
+  fromDecimals: 6, toDecimals: 6, swapType: "EXACT_OUTPUT", amount: "1500",
+};
+const quote = (pairId, overrides = {}) => ({
+  pairId, ts: "2026-09-15T06:00:00.000Z", ok: true, httpStatus: 201, latencyMs: 2290,
+  amountIn: "1501955004", amountOut: "1500000000", amountInUsd: "1501.73", amountOutUsd: "1499.78",
+  minAmountIn: "1500453048", minAmountOut: "1500000000", timeEstimate: 27, correlationId: "cid",
+  errorCode: null, errorMessage: null, stateStatus: "ok", stateSince: "2026-09-15T06:00:00.000Z", stateFailures: 0,
+  ...overrides,
+});
+const NOW = "2026-09-15T06:00:30.000Z";
+
+
+const sweepDepth = (rows, overrides = {}) => ({
+  enabled: true, ts: "2026-09-15T00:30:00.000Z", tiers: [100, 1000, 10000], rows, ...overrides,
+});
+
+test("depthCell：有数据时给最大可通档位", () => {
+  const rows = [depthRow(100, true), depthRow(1000, true), depthRow(10000, false)];
+  const depth = sweepDepth(rows);
+  const index = buildDepthIndex(rows);
+  const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index });
+  assert.equal(cell.text, "1k");
+  assert.ok(cell.title.includes("最大可通档位"));
+});
+
+test("depthCell：全档不通给破折号，没扫过给问号，关闭给破折号", () => {
+  const dead = [depthRow(100, false), depthRow(1000, false)];
+  const deadDepth = sweepDepth(dead);
+  assert.equal(depthCell({ pairId: "near:USDC>eth:USDC", depth: deadDepth, index: buildDepthIndex(dead) }).text, "—");
+
+  const notYet = sweepDepth([], { ts: null });
+  const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth: notYet, index: new Map() });
+  assert.equal(cell.text, "?");
+  assert.ok(cell.title.includes("还没有扫描过"));
+
+  const off = sweepDepth([], { enabled: false });
+  const offCell = depthCell({ pairId: "near:USDC>eth:USDC", depth: off, index: new Map() });
+  assert.equal(offCell.text, "—");
+  assert.ok(offCell.title.includes("关闭"));
+});
+
+test("depthCell：接口没取到时（depth 为 null）给问号，不崩", () => {
+  assert.equal(depthCell({ pairId: "x", depth: null, index: new Map() }).text, "?");
+  assert.equal(depthCell({ pairId: "x", depth: undefined, index: undefined }).text, "?");
+});
+
+test("depthCell：该对没有深度数据时给破折号（不能在白名单外瞎显示）", () => {
+  const rows = [depthRow(100, true, { pairId: "other:PAIR" })];
+  const depth = sweepDepth(rows);
+  const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
+  assert.equal(cell.text, "—");
+});
+
+test("depthCurveFor 按档位升序给出曲线，含成本与对方原文", () => {
+  const rows = [
+    depthRow(1000, false, { amountInUsd: null, amountOutUsd: null }),
+    depthRow(100, true, { amountInUsd: "100.41", amountOutUsd: "100.00" }),
+  ];
+  const depth = sweepDepth(rows);
+  const curve = depthCurveFor({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
+  assert.deepEqual(curve.map((point) => point.tierText), ["100", "1k"], "必须按档位升序，不是输入顺序");
+  assert.equal(curve[0].ok, true);
+  assert.equal(curve[0].costText, "0.41%");
+  assert.equal(curve[1].ok, false);
+  assert.equal(curve[1].costText, "—", "不通的档位没有成本可言");
+  assert.equal(curve[1].note, "No liquidity available");
+});
+
+test("depthCurveFor 在没有数据时给空数组", () => {
+  assert.deepEqual(depthCurveFor({ pairId: "x", depth: null, index: new Map() }), []);
+  assert.deepEqual(depthCurveFor({ pairId: "x", depth: sweepDepth([], { ts: null }), index: new Map() }), []);
+});
+
+test("buildRows 带上 depth 时给出可按列与曲线", () => {
+  const rows = [depthRow(100, true), depthRow(1000, false)];
+  const built = buildRows({
+    pairs: [PAIR_A], latest: [quote(PAIR_A.id)], stats: [], depth: sweepDepth(rows), nowIso: NOW,
+  });
+  assert.equal(built[0].depthText, "100");
+  assert.equal(built[0].depthCurve.length, 2);
+});
+
+test("buildRows 不带 depth 时行为与加这个功能之前一致（既有用例不受影响）", () => {
+  const built = buildRows({ pairs: [PAIR_A], latest: [quote(PAIR_A.id)], stats: [], nowIso: NOW });
+  assert.equal(built[0].depthText, "?");
+  assert.deepEqual(built[0].depthCurve, []);
 });

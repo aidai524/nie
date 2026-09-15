@@ -172,7 +172,7 @@ export function collectChains(pairs) {
   return [...chains].sort();
 }
 
-function buildRow({ pair, quote, stat, nowIso }) {
+function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
   const pairId = pair?.id ?? quote?.pairId ?? "?";
   // 状态一律取服务端的判定结果（/latest 的 stateStatus）。
   // 不用 /pairs 里的 state —— 那是启动那一刻的快照；也不自己算 ——
@@ -212,6 +212,9 @@ function buildRow({ pair, quote, stat, nowIso }) {
     receiveText: quote?.ok ? formatAmount(amountOut) : "—",
     usdText: quote?.amountInUsd == null ? "—" : `$${formatAmount(Number(quote.amountInUsd))}`,
     costText: formatCostPct(costPct),
+depthText: depthCell({ pairId, depth: depth ?? null, index: depthIndex }).text,
+    depthTitle: depthCell({ pairId, depth: depth ?? null, index: depthIndex }).title,
+    depthCurve: depthCurveFor({ pairId, depth: depth ?? null, index: depthIndex }),
     deviationText: quote?.ok ? formatDeviation(deviationPct) : "—",
     deviationMuted: quote?.ok ? lowSample : false,
     latencyMs: quote?.latencyMs ?? null,
@@ -278,20 +281,56 @@ export function buildDepthIndex(rows) {
   return index;
 }
 
-export function buildRows({ pairs = [], latest = [], stats = [], nowIso }) {
+/** 「可按」单元格：这一对能通过的最大档位。 */
+export function depthCell({ pairId, depth, index }) {
+  // 「没取到」与「已关闭」必须分开：前者是 ?（还没扫过/本次拉取失败），后者才是 —
+  if (!depth) return { text: "?", title: "还没有取到深度数据" };
+  if (depth.enabled !== true) return { text: "—", title: "深度扫描已在 config.json 里关闭" };
+  if (depth.ts === null || depth.ts === undefined) {
+    return { text: "?", title: "还没有扫描过（最长等一个扫描间隔）" };
+  }
+  const entry = index?.get(pairId);
+  if (!entry || entry.maxTierUsd === null) {
+    return { text: "—", title: "所有档位都没有报价" };
+  }
+  return { text: formatTier(entry.maxTierUsd), title: "最大可通档位（名义美元）；点开这一行看完整曲线" };
+}
+
+/** 展开行里的档位曲线，按档位升序。 */
+export function depthCurveFor({ pairId, depth, index }) {
+  if (!depth || depth.enabled !== true || depth.ts === null || depth.ts === undefined) return [];
+  const entry = index?.get(pairId);
+  if (!entry) return [];
+  return [...entry.byTier.values()]
+    .sort((left, right) => left.tierUsd - right.tierUsd)
+    .map((row) => ({
+      tierText: formatTier(row.tierUsd),
+      ok: row.ok === true,
+      costText: row.ok === true ? formatCostPct(computeCostPct(row.amountInUsd, row.amountOutUsd)) : "—",
+      note: row.ok === true ? "" : String(row.errorMessage ?? row.errorCode ?? "未知错误"),
+    }));
+}
+
+export function buildRows({ pairs = [], latest = [], stats = [], depth = null, nowIso }) {
   const latestByPair = new Map(latest.map((entry) => [entry.pairId, entry]));
   const statsByPair = new Map(stats.map((entry) => [entry.pairId, entry]));
+  // 索引只建一次：按行建会是 O(n²)
+  const depthIndex = depth?.enabled === true && depth.ts !== null && depth.ts !== undefined
+    ? buildDepthIndex(depth.rows ?? [])
+    : new Map();
   const rows = [];
   const seen = new Set();
 
   for (const pair of pairs) {
     seen.add(pair.id);
-    rows.push(buildRow({ pair, quote: latestByPair.get(pair.id) ?? null, stat: statsByPair.get(pair.id) ?? null, nowIso }));
+    rows.push(buildRow({
+      pair, quote: latestByPair.get(pair.id) ?? null, stat: statsByPair.get(pair.id) ?? null,
+      depth, depthIndex, nowIso,
+    }));
   }
-  // /latest 里出现而 /pairs 里没有的行 —— 说明契约漂移了，要显示出来而不是静默丢掉
   for (const entry of latest) {
     if (seen.has(entry.pairId)) continue;
-    rows.push(buildRow({ pair: null, quote: entry, stat: statsByPair.get(entry.pairId) ?? null, nowIso }));
+    rows.push(buildRow({ pair: null, quote: entry, stat: statsByPair.get(entry.pairId) ?? null, depth, depthIndex, nowIso }));
   }
   return rows;
 }
@@ -331,6 +370,7 @@ export function init() {
     pairs: [],
     rows: [],
     health: null,
+    depth: null,
     lastLoadedAt: null,
     failures: 0,
     chainsBuilt: false,
@@ -421,7 +461,7 @@ export function init() {
     tr.className = "detail";
     tr.dataset.detail = row.pairId;
     const td = document.createElement("td");
-    td.colSpan = 9;
+    td.colSpan = 10;
     const items = [
       ["correlationId", row.detail.correlationId],
       ["HTTP", row.detail.httpStatus],
@@ -441,6 +481,20 @@ export function init() {
       span.append(label, document.createTextNode(` ${value}`));
       td.append(span);
     }
+if (row.depthCurve.length > 0) {
+        const list = document.createElement("ol");
+        list.className = "depth-curve";
+        for (const point of row.depthCurve) {
+          const li = document.createElement("li");
+          li.className = point.ok ? "ok" : "bad";
+          // 一律 textContent：errorMessage 是对方返回的任意字符串
+          li.textContent = point.ok
+            ? `${point.tierText} 可通 · 成本 ${point.costText}`
+            : `${point.tierText} 不通 · ${point.note}`;
+          list.append(li);
+        }
+        td.append(list);
+      }
     tr.append(td);
     tr.addEventListener("click", () => tr.remove());
     anchor.after(tr);
@@ -455,6 +509,7 @@ export function init() {
       status: cell(row.statusLabel, `status ${row.status ?? "unknown"}`),
       amount: cell(`${row.payText} → ${row.receiveText}`, "amount"),
       cost: cell(row.costText, "cost"),
+      depth: cell(row.depthText, "depth depth-col"),
       usd: cell(row.usdText, "usd hide-narrow"),
       deviation: cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
       latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn" : "latency hide-narrow"),
@@ -463,7 +518,8 @@ export function init() {
     };
     if (row.lastQuoteTitle) cells.time.title = row.lastQuoteTitle;
     if (row.deviationMuted) cells.deviation.title = "样本不足，服务端此时不会判定偏离；仅供参考";
-    tr.append(cells.pair, cells.status, cells.amount, cells.cost, cells.usd, cells.deviation, cells.latency, cells.time, cells.note);
+    if (row.depthTitle) cells.depth.title = row.depthTitle;
+    tr.append(cells.pair, cells.status, cells.amount, cells.cost, cells.depth, cells.usd, cells.deviation, cells.latency, cells.time, cells.note);
     if (row.detail) {
       tr.classList.add("clickable");
       tr.addEventListener("click", () => toggleDetail(row, tr));
@@ -487,19 +543,25 @@ export function init() {
     if (state.inFlight) return;
     state.inFlight = true;
     try {
-      const [latest, stats, health] = await Promise.all([
+      const [latest, stats, health, depth] = await Promise.all([
         apiGet("/latest"),
         apiGet("/stats?window=1h"),
         // /health 在陈旧时回 503，但「陈旧」这件事本身正是我们要读的，所以允许 503
         apiGet("/health", { allowStatus: [503] }),
+        // /depth 拿不到不该让整页失败 —— 只是「可按」列显示问号
+        apiGet("/depth").catch(() => null),
       ]);
       state.health = health;
+      state.depth = depth;
       state.rows = buildRows({
         pairs: state.pairs,
         latest: latest.latest ?? [],
         stats: stats.pairs ?? [],
+        depth: state.depth,
         nowIso: new Date().toISOString(),
       });
+      // 扫描关闭时整列隐藏 —— 否则会与「全档不通」的破折号长得一样，而手机上悬停不了
+      document.getElementById("table").classList.toggle("no-depth", state.depth?.enabled === false);
       state.lastLoadedAt = new Date().toISOString();
       state.failures = 0;
       el.tokenBox.hidden = true;

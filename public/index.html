@@ -104,6 +104,12 @@
 
     .empty { color: var(--muted); padding: 16px 0; }
 
+.no-depth .depth-col { display: none; }
+    tr.detail ol.depth-curve { margin: 6px 0 0; padding-left: 20px; }
+    tr.detail ol.depth-curve li { margin: 2px 0; }
+    tr.detail ol.depth-curve li.ok { color: var(--ok); }
+    tr.detail ol.depth-curve li.bad { color: var(--err); }
+
     @media (max-width: 900px) {
       /* 用类名而不是 nth-child：列的位置会变，下标不会自己跟着变 */
       .hide-narrow { display: none; }
@@ -149,6 +155,7 @@
           <th>付 → 得</th>
           <th title="按美元计价：(付出 − 收到) / 付出。含对方手续费与桥接费，与两个 token 的小数位无关">成本</th>
           <th class="hide-narrow">USD</th>
+<th class="depth-col" title="这一对能通过的最大档位（名义美元）；点开行看完整曲线">可按</th>
           <th title="当前报价相对近 1 小时成功报价中位数的变化。与告警判定用的是同一个数">较基准</th>
           <th class="hide-narrow">延迟</th>
           <th>最后报价</th>
