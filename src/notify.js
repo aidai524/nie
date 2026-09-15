@@ -70,12 +70,17 @@ export function formatDigest(summary, { windowHours = 24, mention = "" } = {}) {
   if (summary.worst?.length > 0) {
     lines.push(`异常最多：${summary.worst.map((w) => `${w.label}（${w.failures} 次）`).join("、")}`);
   }
-if (summary.depth && summary.depth.byTier.length > 0) {
+  if (summary.depth && summary.depth.byTier.length > 0) {
+    // 分母用「实际扫到的对数」：没被扫到的对（一小时内没有成功报价，无法折算金额）不是
+    // 「做不了这一档」，把它们算进分母会让这一行谎报。
     const profile = summary.depth.byTier
-      .map((entry) => `${formatTierLabel(entry.tierUsd)} ${entry.passing}/${summary.depth.pairCount}`)
+      .map((entry) => `${formatTierLabel(entry.tierUsd)} ${entry.passing}/${summary.depth.sweptPairs}`)
       .join(" · ");
-    lines.push(`深度（最近一次扫描，可通对数/总对数）：${profile}`
-      + (summary.depth.deadPairs > 0 ? `（${summary.depth.deadPairs} 对全档不通）` : ""));
+    const notes = [];
+    if (summary.depth.deadPairs > 0) notes.push(`${summary.depth.deadPairs} 对全档不通`);
+    if (summary.depth.unsweptPairs > 0) notes.push(`${summary.depth.unsweptPairs} 对无可用价格未扫描`);
+    lines.push(`深度（最近一次扫描，可通对数/已扫描对数）：${profile}`
+      + (notes.length > 0 ? `（${notes.join("；")}）` : ""));
   }
 
   if (typeof summary.latencyP95 === "number") {

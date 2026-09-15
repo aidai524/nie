@@ -575,10 +575,13 @@ test("summariseDepth 数出每档可通的对数与全档不通的对数", () =>
     { tierUsd: 100, passing: 2 }, { tierUsd: 1000, passing: 1 }, { tierUsd: 10000, passing: 0 },
   ]);
   assert.equal(summary.deadPairs, 1, "只有 c 全档不通");
-  assert.equal(summary.pairCount, 4);
+  assert.equal(summary.pairCount, 4, "pairCount 是白名单总数");
+  // 分母必须用「实际扫到的对数」而不是白名单总数 —— 否则没被扫到的对会被误读成「做不了这一档」
+  assert.equal(summary.sweptPairs, 3, "rows 里出现过的币对：a/b/c");
+  assert.equal(summary.unsweptPairs, 1, "白名单 4 对里 d 没有被扫");
 });
 
 test("summariseDepth 对空输入不崩", () => {
-  assert.deepEqual(summariseDepth({ rows: [], pairCount: 0, tiers: [] }), { pairCount: 0, byTier: [], deadPairs: 0 });
-  assert.deepEqual(summariseDepth({}), { pairCount: 0, byTier: [], deadPairs: 0 });
+  assert.deepEqual(summariseDepth({ rows: [], pairCount: 0, tiers: [] }), { pairCount: 0, byTier: [], deadPairs: 0, sweptPairs: 0, unsweptPairs: 0 });
+  assert.deepEqual(summariseDepth({}), { pairCount: 0, byTier: [], deadPairs: 0, sweptPairs: 0, unsweptPairs: 0 });
 });

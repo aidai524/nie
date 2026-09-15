@@ -720,14 +720,18 @@ test("日汇总在有深度快照时多出一行", () => {
   const text = formatDigest({
     windowHours: 24, pairCount: 38, totalRounds: 100, okRounds: 95, okRate: 0.95,
     worst: [], latencyP95: 2000,
-    depth: { pairCount: 38, byTier: [{ tierUsd: 1000000, passing: 12 }, { tierUsd: 100000, passing: 29 }], deadPairs: 3 },
+    depth: {
+      pairCount: 38, byTier: [{ tierUsd: 1000000, passing: 12 }, { tierUsd: 100000, passing: 29 }],
+      deadPairs: 3, sweptPairs: 33, unsweptPairs: 5,
+    },
   });
   assert.ok(text.includes("深度"), "要有深度这一行");
   assert.ok(text.includes("1M"), "档位要用人读形式");
-  assert.ok(text.includes("12/38"));
+  assert.ok(text.includes("12/33"), "分母必须是实际扫到的 33 对，不是白名单的 38");
   assert.ok(text.includes("100k"));
-  assert.ok(text.includes("29/38"));
+  assert.ok(text.includes("29/33"));
   assert.ok(text.includes("3 对全档不通"));
+  assert.ok(text.includes("5 对无可用价格未扫描"), "没被扫到的对必须说出来，否则会被误读成故障");
 });
 
 test("日汇总在没有深度数据时不加那一行（行为与加这个功能之前完全一致）", () => {
@@ -840,12 +844,15 @@ test("summariseDepth 数出每档可通的对数与全档不通的对数", () =>
     { tierUsd: 100, passing: 2 }, { tierUsd: 1000, passing: 1 }, { tierUsd: 10000, passing: 0 },
   ]);
   assert.equal(summary.deadPairs, 1, "只有 c 全档不通");
-  assert.equal(summary.pairCount, 4);
+  assert.equal(summary.pairCount, 4, "pairCount 是白名单总数");
+  // 分母必须用「实际扫到的对数」而不是白名单总数 —— 否则没被扫到的对会被误读成「做不了这一档」
+  assert.equal(summary.sweptPairs, 3, "rows 里出现过的币对：a/b/c");
+  assert.equal(summary.unsweptPairs, 1, "白名单 4 对里 d 没有被扫");
 });
 
 test("summariseDepth 对空输入不崩", () => {
-  assert.deepEqual(summariseDepth({ rows: [], pairCount: 0, tiers: [] }), { pairCount: 0, byTier: [], deadPairs: 0 });
-  assert.deepEqual(summariseDepth({}), { pairCount: 0, byTier: [], deadPairs: 0 });
+  assert.deepEqual(summariseDepth({ rows: [], pairCount: 0, tiers: [] }), { pairCount: 0, byTier: [], deadPairs: 0, sweptPairs: 0, unsweptPairs: 0 });
+  assert.deepEqual(summariseDepth({}), { pairCount: 0, byTier: [], deadPairs: 0, sweptPairs: 0, unsweptPairs: 0 });
 });
 ```
 
@@ -911,7 +918,14 @@ export function summariseDepth({ rows = [], pairCount = 0, tiers = [] } = {}) {
     const entry = counter.get(row.tierUsd);
     if (entry) entry.passing += 1;
   }
-  return { pairCount, byTier, deadPairs: [...seenPairs].filter((id) => !passingPairs.has(id)).length };
+  const sweptPairs = seenPairs.size;
+  return {
+    pairCount,
+    byTier,
+    deadPairs: [...seenPairs].filter((id) => !passingPairs.has(id)).length,
+    sweptPairs,
+    unsweptPairs: Math.max(0, pairCount - sweptPairs),
+  };
 }
 ```
 
@@ -1042,11 +1056,16 @@ function logger_warnSkip(ctx, skipped) {
 
 ```js
   if (summary.depth && summary.depth.byTier.length > 0) {
+    // 分母用「实际扫到的对数」：没被扫到的对（一小时内没有成功报价，无法折算金额）不是
+    // 「做不了这一档」，把它们算进分母会让这一行谎报。
     const profile = summary.depth.byTier
-      .map((entry) => `${formatTierLabel(entry.tierUsd)} ${entry.passing}/${summary.depth.pairCount}`)
+      .map((entry) => `${formatTierLabel(entry.tierUsd)} ${entry.passing}/${summary.depth.sweptPairs}`)
       .join(" · ");
-    lines.push(`深度（最近一次扫描，可通对数/总对数）：${profile}`
-      + (summary.depth.deadPairs > 0 ? `（${summary.depth.deadPairs} 对全档不通）` : ""));
+    const notes = [];
+    if (summary.depth.deadPairs > 0) notes.push(`${summary.depth.deadPairs} 对全档不通`);
+    if (summary.depth.unsweptPairs > 0) notes.push(`${summary.depth.unsweptPairs} 对无可用价格未扫描`);
+    lines.push(`深度（最近一次扫描，可通对数/已扫描对数）：${profile}`
+      + (notes.length > 0 ? `（${notes.join("；")}）` : ""));
   }
 ```
 

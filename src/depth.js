@@ -59,5 +59,12 @@ export function summariseDepth({ rows = [], pairCount = 0, tiers = [] } = {}) {
     const entry = counter.get(row.tierUsd);
     if (entry) entry.passing += 1;
   }
-  return { pairCount, byTier, deadPairs: [...seenPairs].filter((id) => !passingPairs.has(id)).length };
+  const sweptPairs = seenPairs.size;
+  return {
+    pairCount,
+    byTier,
+    deadPairs: [...seenPairs].filter((id) => !passingPairs.has(id)).length,
+    sweptPairs,
+    unsweptPairs: Math.max(0, pairCount - sweptPairs),
+  };
 }
