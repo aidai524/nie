@@ -51,7 +51,6 @@ const token = (name) => {
 };
 
 const HOVER_ROW = /tbody tr\[role="button"\]:hover[^{]*\{([^}]*)\}/;
-const DEPTH_DETAIL = /\.depth-detail b\s*\{([^}]*)\}/;
 // .detail-grid b 不设 color（继承自 body），所以它的前景用 foreground 令牌表示
 const DETAIL_SPAN = /\.detail-grid span\s*\{([^}]*)\}/;
 const STATUS = (label) => new RegExp(`\\.status-${label}\\s*\\{([^}]*)\\}`);
@@ -76,11 +75,13 @@ const PAIRS = [
   ["徽章：失败", fromRule(STATUS("失败"), "color"), fromRule(STATUS("失败"), "background"), 4.5],
   ["徽章：未报价", fromRule(STATUS("未报价"), "color"), fromRule(STATUS("未报价"), "background"), 4.5],
   ["较基准的偏离值", fromRule(/\.deviation\s*\{([^}]*)\}/, "color"), token("surface"), 4.5],
-  ["备注里的失败原文", fromRule(/\.failure-note\s*\{([^}]*)\}/, "color"), token("surface"), 4.5],
+  ["详情里的失败原文", fromRule(/\.failure-detail b\s*\{([^}]*)\}/, "color"), fromRule(/\.detail-row td\s*\{([^}]*)\}/, "background"), 4.5],
+  ["档位：可通", fromRule(/\.depth-detail \.tier\.is-ok b\s*\{([^}]*)\}/, "color"), token("background"), 4.5],
+  ["档位：不通", fromRule(/\.depth-detail \.tier\.is-bad b\s*\{([^}]*)\}/, "color"), token("background"), 4.5],
+  ["档位说明文字", fromRule(/\.depth-detail \.tier small\s*\{([^}]*)\}/, "color"), token("background"), 4.5],
   ["搜索占位符", fromRule(/\.search-label input::placeholder\s*\{([^}]*)\}/, "color"), token("surface"), 4.5],
   ["展开详情：正文", token("foreground"), fromRule(/\.detail-row td\s*\{([^}]*)\}/, "background"), 4.5],
   ["展开详情：标签", fromRule(DETAIL_SPAN, "color"), fromRule(/\.detail-row td\s*\{([^}]*)\}/, "background"), 4.5],
-  ["深度详情文字", fromRule(DEPTH_DETAIL, "color"), fromRule(/\.detail-row td\s*\{([^}]*)\}/, "background"), 4.5],
   ["悬停行上的正文", token("foreground"), fromRule(HOVER_ROW, "background"), 4.5],
   ["悬停行上的次要文字", token("muted"), fromRule(HOVER_ROW, "background"), 4.5],
   ["悬停行上的失败文字", token("red"), fromRule(HOVER_ROW, "background"), 4.5],

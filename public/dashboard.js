@@ -180,8 +180,9 @@ function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
   const status = quote?.stateStatus ?? null;
   const fromKey = pair?.fromKey ?? pairId.split(">")[0] ?? "";
   const toKey = pair?.toKey ?? pairId.split(">")[1] ?? "";
-  // 参考 UI 在币对下方用 <small> 显示链。我们的币对跨两个网络，所以放**目标链**
-  // （白名单是枢纽辐射形状，目标链是区分维度）。
+  // 参考 UI 在币对下方用 <small> 显示链。我们的币对跨两个网络，所以第二行放**源链与目标链**
+  // （白名单是枢纽辐射形状，两个链是区分维度）。
+  const fromChain = String(fromKey).split(":")[0] || "未知";
   const toChain = String(toKey).split(":")[0] || "未知";
   const convert = (raw, decimals) => (pair ? toHumanAmount(raw, decimals) : null);
 
@@ -209,6 +210,7 @@ function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
     label: pair?.label ?? pairId,
     fromKey,
     toKey,
+    fromChain,
     toChain,
     status,
     statusLabel: STATUS_LABELS[status] ?? STATUS_LABELS.unknown,
@@ -530,7 +532,7 @@ export function init() {
     tr.className = "detail-row";
     tr.dataset.detail = row.pairId;
     const td = document.createElement("td");
-    td.colSpan = 10;
+    td.colSpan = 9;
 
     const grid = document.createElement("div");
     grid.className = "detail-grid";
@@ -544,19 +546,37 @@ export function init() {
       ["连续失败", `${row.detail.consecutiveFailures} 次`],
       ["状态起始", row.detail.statusSince],
     ];
+
     for (const [label, value] of items) {
       const box = document.createElement("div");
       box.append(textOf("span", label), textOf("b", value));
       grid.append(box);
     }
+    if (row.note) {
+      // 失败原文单独占满一行（可能很长），并且是可见文字 —— 只靠 title 的话触屏与键盘读不到
+      const box = document.createElement("div");
+      box.className = "failure-detail";
+      box.append(textOf("span", "失败原文"), textOf("b", row.note));
+      grid.append(box);
+    }
     if (row.depthCurve.length > 0) {
       const depthBox = document.createElement("div");
       depthBox.className = "depth-detail";
-      depthBox.append(
-        textOf("span", `深度扫描 / ${row.depthCurve.length} 档`),
-        // 拼好的文本来自纯函数区（depthCurveFor 的 text 字段），这里只 join
-        textOf("b", row.depthCurve.map((point) => point.text).join("  ·  ")),
-      );
+      depthBox.append(textOf("span", `深度扫描 / ${row.depthCurve.length} 档`));
+      const tierList = document.createElement("div");
+      tierList.className = "tier-list";
+      for (const point of row.depthCurve) {
+        // 每个档位独立一块，而不是拼成一行文本
+        const tier = document.createElement("div");
+        tier.className = `tier ${point.ok ? "is-ok" : "is-bad"}`;
+        tier.append(
+          textOf("b", point.tierText),
+          textOf("small", point.ok ? `可通 · ${point.costText}` : `不通 · ${point.note}`),
+        );
+        if (!point.ok) tier.title = point.note;
+        tierList.append(tier);
+      }
+      depthBox.append(tierList);
       grid.append(depthBox);
     }
     td.append(grid);
@@ -589,7 +609,7 @@ export function init() {
         textOf("strong", row.fromKey),
         textOf("span", "→", "arrow"),
         textOf("strong", row.toKey),
-        textOf("small", `目标链 ${row.toChain}`)),
+        textOf("small", `源链 ${row.fromChain} · 目标链 ${row.toChain}`)),
       status: cellWith("", textOf("span", row.statusLabel, `status status-${row.statusLabel}`)),
       amount: cellWith("mono",
         textOf("span", `${row.payText} `),
@@ -602,13 +622,15 @@ export function init() {
       depth: cell(row.depthText, "mono depth-value depth-col"),
       latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, "mono hide-medium"),
       time: cell(row.lastQuoteText, "muted"),
-      note: cell(row.note, row.noteClass === "err" ? "failure-note" : "muted"),
     };
     if (row.lastQuoteTitle) cells.time.title = row.lastQuoteTitle;
+    // 备注列去掉了：失败原因挂到状态徽章的 hover 上（要求如此）。
+    // 完整原文同时进展开详情 —— 只靠 title 的话触屏与键盘读不到。
+    if (row.note) cells.status.title = row.note;
     if (row.deviationMuted) cells.deviation.title = "样本不足，服务端此时不会判定偏离；仅供参考";
     if (row.depthTitle) cells.depth.title = row.depthTitle;
     tr.append(cells.pair, cells.status, cells.amount, cells.usd, cells.cost,
-      cells.deviation, cells.depth, cells.latency, cells.time, cells.note);
+      cells.deviation, cells.depth, cells.latency, cells.time);
     return tr;
   }
 
