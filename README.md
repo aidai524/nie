@@ -39,7 +39,7 @@ npm start
 npm test
 ```
 
-179 个用例，覆盖配置、金额解析、币对解析、HTTP、SQLite、判定、通知与服务端。
+281 个用例：配置 21、金额与数值 15、币对解析 18、HTTP 12、SQLite 32、判定 21、报价 16、通知 21、服务端 25、装配 33、面板 61、深度 6。
 
 ## 命令行参数
 
@@ -124,7 +124,7 @@ docker run -d --name nearintents-monitor \
 
 | 端点 | 说明 |
 | --- | --- |
-| `GET /health` | 健康状态：`ok`、`lastRoundTs`、`pairs`、`dbBytes`；距上一轮超过 3 个轮次时返回 503 |
+| `GET /health` | 健康状态：`ok`、`startedAt`、`lastRoundTs`、`lastRoundAgeMs`、`lastRoundDurationMs`、`consecutiveRoundErrors`、`pairs`、`dbBytes`；距上一轮超过 3 个轮次时返回 503 |
 | `GET /pairs` | 全部币对及当前状态 |
 | `GET /latest?status=error` | 每对最新一条报价，可用 `status`（`ok` / `error` / `deviant`）过滤 |
 | `GET /history?pair=&from=&to=&limit=&res=` | 原始报价行，`res=hourly` 切换为小时聚合 |
