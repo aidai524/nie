@@ -75,6 +75,12 @@
     { "from": "bsc:USDT", "to": "tron:USDT" },
     { "from": "tron:USDT", "to": "bsc:USDT" }
   ],
+  "depth": {
+    "enabled": true,
+    "intervalSec": 900,
+    "tiers": [100, 1000, 10000, 100000, 1000000],
+    "concurrency": 3
+  },
   "detect": {
     "priceDeviationPct": 10,
     "minSamples": 5,
