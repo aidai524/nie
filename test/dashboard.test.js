@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   toHumanAmount, formatAmount, formatDeviation, formatRelativeTime,
-  computeDeviationPct, computeCostPct, formatCostPct, buildRows, summarise, sortRows, applyFilters,
+  computeDeviationPct, computeCostPct, formatCostPct, freshnessText, buildRows, summarise, sortRows, applyFilters,
   collectChains, STATUS_LABELS,
 } from "../public/dashboard.js";
 
@@ -175,6 +175,38 @@ test("formatRelativeTime 对坏输入给破折号", () => {
 });
 
 // ---------- buildRows ----------
+
+test("freshnessText：刚启动、第一轮还没跑完时不能说「采集已陈旧」", () => {
+  // lastRoundTs 是内存态，启动时为空 → /health 回 503。这时的 503 意思是「还没开始」，
+  // 不是「陈旧」。说成陈旧会让人以为采集挂了，而那只是第一轮还在跑（约 15 秒）。
+  const out = freshnessText({ health: { ok: false, lastRoundTs: null, consecutiveRoundErrors: 0 }, loadedAtIso: NOW, nowIso: NOW });
+  assert.ok(out.text.includes("正在采集第一轮"), `实际: ${out.text}`);
+  assert.ok(!out.text.includes("陈旧"), "不能同时说陈旧");
+  assert.equal(out.warn, false, "这不是警告态");
+});
+
+test("freshnessText：真的陈旧时才是警告", () => {
+  const out = freshnessText({ health: { ok: false, lastRoundTs: "2026-09-15T05:00:00.000Z", consecutiveRoundErrors: 0 }, loadedAtIso: NOW, nowIso: NOW });
+  assert.ok(out.text.includes("采集已陈旧"));
+  assert.equal(out.warn, true);
+});
+
+test("freshnessText：还没取到数据时显示加载中", () => {
+  const out = freshnessText({ health: null, loadedAtIso: null, nowIso: NOW });
+  assert.equal(out.text, "正在加载…");
+  assert.equal(out.warn, false);
+});
+
+test("freshnessText：一切正常时只报最后更新时间", () => {
+  const out = freshnessText({ health: { ok: true, lastRoundTs: NOW }, loadedAtIso: NOW, nowIso: "2026-09-15T06:01:00.000Z" });
+  assert.equal(out.text, "最后更新 30 秒前");
+  assert.equal(out.warn, false);
+});
+
+test("freshnessText：采集轮次连续失败时追加说明", () => {
+  const out = freshnessText({ health: { ok: true, lastRoundTs: NOW, consecutiveRoundErrors: 3 }, loadedAtIso: NOW, nowIso: NOW });
+  assert.ok(out.text.includes("连续失败 3 次"));
+});
 
 test("buildRows 关联 /pairs 与 /latest，并用 from/to 的 decimals 分别换算", () => {
   const [row] = buildRows({

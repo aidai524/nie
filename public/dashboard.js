@@ -252,6 +252,24 @@ function dropTrailingZero(value) {
   return String(Number(value.toFixed(2)));
 }
 
+/**
+ * 顶栏那行状态文案。放在纯函数区是因为渲染层没有自动化测试，
+ * 而这里的判断会直接决定「用户看到的是不是事实」。
+ */
+export function freshnessText({ health, loadedAtIso = null, nowIso }) {
+  if (loadedAtIso === null) return { text: "正在加载…", warn: false };
+  const parts = [`最后更新 ${formatRelativeTime(loadedAtIso, nowIso)}`];
+  if (health && health.lastRoundTs === null) {
+    // 刚启动：lastRoundTs 是内存态、第一轮还没跑完，/health 因此回 503。
+    // 这个 503 的意思是「还没开始」，不是「陈旧」—— 说成陈旧会让人以为采集挂了。
+    parts.push("正在采集第一轮（约 15 秒）");
+    return { text: parts.join(" · "), warn: false };
+  }
+  if (health?.ok === false) parts.push("采集已陈旧");
+  if (health?.consecutiveRoundErrors > 0) parts.push(`采集轮次连续失败 ${health.consecutiveRoundErrors} 次`);
+  return { text: parts.join(" · "), warn: health?.ok === false };
+}
+
 /** 某一对的档位行里，能通过的最大档位。全不通给 null。 */
 export function largestPassingTier(rows) {
   let largest = null;
@@ -424,18 +442,14 @@ export function init() {
   });
 
   function renderFreshness() {
-    if (state.lastLoadedAt === null) {
-      el.freshness.textContent = "正在加载…";
-      el.freshness.className = "";
-      return;
-    }
-    const parts = [`最后更新 ${formatRelativeTime(state.lastLoadedAt, new Date().toISOString())}`];
-    // 陈旧与否直接采信服务端的判定（/health 的 ok），不自己拿 intervalSec 重算 ——
-    // 那个值不在 API 里，重算就会和服务端说法不一致。
-    if (state.health?.ok === false) parts.push("采集已陈旧");
-    if (state.health?.consecutiveRoundErrors > 0) parts.push(`采集轮次连续失败 ${state.health.consecutiveRoundErrors} 次`);
-    el.freshness.textContent = parts.join(" · ");
-    el.freshness.className = state.health?.ok === false ? "warn" : "";
+    // 判断逻辑在纯函数区（freshnessText），这里只负责赋值
+    const { text, warn } = freshnessText({
+      health: state.health,
+      loadedAtIso: state.lastLoadedAt,
+      nowIso: new Date().toISOString(),
+    });
+    el.freshness.textContent = text;
+    el.freshness.className = warn ? "warn" : "";
   }
 
   function renderChains() {
