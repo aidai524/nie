@@ -70,6 +70,14 @@ export function formatDigest(summary, { windowHours = 24, mention = "" } = {}) {
   if (summary.worst?.length > 0) {
     lines.push(`异常最多：${summary.worst.map((w) => `${w.label}（${w.failures} 次）`).join("、")}`);
   }
+if (summary.depth && summary.depth.byTier.length > 0) {
+    const profile = summary.depth.byTier
+      .map((entry) => `${formatTierLabel(entry.tierUsd)} ${entry.passing}/${summary.depth.pairCount}`)
+      .join(" · ");
+    lines.push(`深度（最近一次扫描，可通对数/总对数）：${profile}`
+      + (summary.depth.deadPairs > 0 ? `（${summary.depth.deadPairs} 对全档不通）` : ""));
+  }
+
   if (typeof summary.latencyP95 === "number") {
     lines.push(`延迟 P95：${Math.round(summary.latencyP95)}ms`);
   }
@@ -98,4 +106,12 @@ export function createNotifier({ enabled, webhookUrl, timeoutMs = 10000, fetchIm
       }
     },
   };
+}
+
+function formatTierLabel(tierUsd) {
+  const value = Number(tierUsd);
+  if (!Number.isFinite(value) || value <= 0) return "?";
+  if (value >= 1e6) return `${String(Number((value / 1e6).toFixed(2)))}M`;
+  if (value >= 1e3) return `${String(Number((value / 1e3).toFixed(2)))}k`;
+  return String(value);
 }

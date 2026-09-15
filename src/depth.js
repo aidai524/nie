@@ -41,3 +41,23 @@ export function depthAmountMinor(quote, tierUsd) {
   if (minor <= 0n) return null;
   return minor.toString();
 }
+
+/**
+ * 把最近一次扫描归成日汇总要用的形状。纯函数。
+ * 只有 ok === true 的行才算「可通」；一个币对只要有一档能通就不算 dead。
+ */
+export function summariseDepth({ rows = [], pairCount = 0, tiers = [] } = {}) {
+  const byTier = tiers.map((tierUsd) => ({ tierUsd, passing: 0 }));
+  const counter = new Map(tiers.map((tierUsd, i) => [tierUsd, byTier[i]]));
+  const seenPairs = new Set();
+  const passingPairs = new Set();
+  for (const row of rows) {
+    if (!row || typeof row.pairId !== "string") continue;
+    seenPairs.add(row.pairId);
+    if (row.ok !== true) continue;
+    passingPairs.add(row.pairId);
+    const entry = counter.get(row.tierUsd);
+    if (entry) entry.passing += 1;
+  }
+  return { pairCount, byTier, deadPairs: [...seenPairs].filter((id) => !passingPairs.has(id)).length };
+}

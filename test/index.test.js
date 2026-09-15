@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseArgs, createWakeup, createLogger, loadPairs, runRound, runMaintenance, main } from "../src/index.js";
+import { parseArgs, createWakeup, createLogger, loadPairs, runRound, runMaintenance, main, runDepthSweep } from "../src/index.js";
+import { summariseDepth } from "../src/depth.js";
 import { hourFloorIso, openStore } from "../src/store.js";
 import { ConfigError } from "../src/config.js";
 
@@ -25,6 +26,7 @@ const CONFIG = {
   addresses: { near: "monitor.near", eth: "0xADDR", sol: "soladdr" },
   pairs: [{ from: "near:USDC", to: "eth:USDC" }, { from: "near:USDC", to: "sol:USDC" }],
   detect: { priceDeviationPct: 10, minSamples: 5, realertMinutes: 30, rollingWindowMinutes: 60 },
+  depth: { enabled: true, intervalSec: 900, tiers: [100, 1000, 10000, 100000, 1000000], concurrency: 3 },
   slack: { enabled: true, mention: "", digest: { enabled: false, hourLocal: 9 } },
   retention: { rawDays: 14, hourlyDays: 0 },
   server: { host: "127.0.0.1", port: 0, cors: "*", bearerToken: "" },
@@ -290,11 +292,13 @@ const localHour = (hour, minute = 0) => {
 
 const maintenanceCtx = (store, { now, digest, notifier }) => ({
   store,
+  pairs: [],
   notifier: notifier ?? { send: async () => ({ ok: true }) },
   logger: QUIET,
   now,
   config: {
     ...CONFIG,
+    depth: { ...CONFIG.depth, enabled: false },
     slack: { enabled: true, mention: "", digest },
     retention: { rawDays: 14, hourlyDays: 0 },
   },
@@ -468,4 +472,113 @@ test("main 的 /health 快照带 spec §8 要求的全部字段", async () => {
   assert.ok("dbBytes" in health, "spec §8 要求 /health 带 dbBytes");
   assert.equal(await running, 0);
   rmSync(dir, { recursive: true, force: true });
+});
+
+// 深度扫描用的 stub：目标币都是 6 位小数，1 个目标币 = 1 美元，于是档位折算很好核对
+const priceOneUsdFetch = async (_url, init) => {
+  const body = JSON.parse(init.body);
+  const usd = (Number(body.amount) / 1e6).toFixed(6);
+  return {
+    ok: true, status: 201,
+    text: async () => JSON.stringify({
+      correlationId: "cid",
+      quote: {
+        amountIn: body.amount, amountInFormatted: "x", amountInUsd: usd,
+        amountOut: body.amount, amountOutFormatted: "y", amountOutUsd: usd,
+        minAmountIn: body.amount, minAmountOut: body.amount, timeEstimate: 10,
+      },
+    }),
+  };
+};
+
+test("runDepthSweep 对每对每个档位各写一行，并按美元折算金额", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: priceOneUsdFetch, now: T(0) });
+  await runRound(ctx); // 先跑哨兵，才有价格可折算
+  const result = await runDepthSweep({ ...ctx, now: T(1) });
+  assert.equal(result.pairs, 2);
+  assert.equal(result.rows, 10, "2 对 × 5 档");
+  assert.deepEqual(result.skipped, []);
+
+  const sweep = store.getLatestSweep();
+  assert.equal(sweep.ts, T(1).toISOString());
+  assert.deepEqual([...new Set(sweep.rows.map((r) => r.tierUsd))], [100, 1000, 10000, 100000, 1000000]);
+  const hundred = sweep.rows.find((r) => r.pairId === PAIR_A.id && r.tierUsd === 100);
+  assert.equal(hundred.amountMinor, "100000000", "100 美元 ÷ 1 美元/币 = 100 个币 = 1e8 最小单位");
+  assert.equal(hundred.ok, true);
+  store.close();
+});
+
+test("runDepthSweep 跳过一小时内有不出价格的那些币对", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: failFetch, now: T(0) });
+  await runRound(ctx); // 哨兵全失败 → 库里没有可用价格
+  const result = await runDepthSweep({ ...ctx, now: T(1) });
+  assert.deepEqual(result.skipped.sort(), [PAIR_A.id, PAIR_B.id].sort());
+  assert.equal(result.rows, 0);
+  assert.equal(store.getLatestSweep().ts, null, "没有任何行写入");
+  store.close();
+});
+
+test("runDepthSweep 把失败档位也写进去（那是信号，不是噪声）", async () => {
+  let call = 0;
+  const flaky = async (url, init) => {
+    call += 1;
+    // 前 2 次（哨兵那 2 对）成功，之后的深度请求全失败
+    if (call <= 2) return priceOneUsdFetch(url, init);
+    return { ok: false, status: 400, text: async () => JSON.stringify({ message: "No liquidity available" }) };
+  };
+  const { ctx, store } = makeCtx({ fetchImpl: flaky, now: T(0) });
+  await runRound(ctx);
+  const result = await runDepthSweep({ ...ctx, now: T(1) });
+  assert.equal(result.rows, 10);
+  const sweep = store.getLatestSweep();
+  assert.equal(sweep.rows.every((r) => r.ok === false), true);
+  assert.equal(sweep.rows[0].errorCode, "http_4xx");
+  assert.equal(sweep.rows[0].errorMessage, "No liquidity available");
+  store.close();
+});
+
+test("runMaintenance 到点才扫描，并推进 meta.last_sweep_ts", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: priceOneUsdFetch, now: T(0) });
+  await runRound(ctx);
+  // 第一次：没有 last_sweep_ts → 应该扫
+  await runMaintenance({ ...ctx, now: T(1) });
+  assert.equal(store.getLatestSweep().ts, T(1).toISOString());
+  assert.equal(store.getMeta("last_sweep_ts"), T(1).toISOString());
+  // 第二次：不到 intervalSec（900s）→ 不该再扫
+  await runMaintenance({ ...ctx, now: new Date(T(1).getTime() + 60000) });
+  assert.equal(store.getLatestSweep().ts, T(1).toISOString(), "没到点不应产生新扫描");
+  // 第三次：过点 → 应该扫
+  const later = new Date(T(1).getTime() + 901000);
+  await runMaintenance({ ...ctx, now: later });
+  assert.equal(store.getLatestSweep().ts, later.toISOString());
+  store.close();
+});
+
+test("depth.enabled 为 false 时完全不扫描", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: priceOneUsdFetch, now: T(0) });
+  ctx.config = { ...CONFIG, depth: { ...CONFIG.depth, enabled: false } };
+  await runRound(ctx);
+  await runMaintenance({ ...ctx, now: T(1) });
+  assert.equal(store.getLatestSweep().ts, null);
+  assert.equal(store.getMeta("last_sweep_ts"), undefined);
+  store.close();
+});
+
+test("summariseDepth 数出每档可通的对数与全档不通的对数", () => {
+  const rows = [
+    { pairId: "a", tierUsd: 100, ok: true }, { pairId: "a", tierUsd: 1000, ok: true }, { pairId: "a", tierUsd: 10000, ok: false },
+    { pairId: "b", tierUsd: 100, ok: true }, { pairId: "b", tierUsd: 1000, ok: false }, { pairId: "b", tierUsd: 10000, ok: false },
+    { pairId: "c", tierUsd: 100, ok: false }, { pairId: "c", tierUsd: 1000, ok: false }, { pairId: "c", tierUsd: 10000, ok: false },
+  ];
+  const summary = summariseDepth({ rows, pairCount: 4, tiers: [100, 1000, 10000] });
+  assert.deepEqual(summary.byTier, [
+    { tierUsd: 100, passing: 2 }, { tierUsd: 1000, passing: 1 }, { tierUsd: 10000, passing: 0 },
+  ]);
+  assert.equal(summary.deadPairs, 1, "只有 c 全档不通");
+  assert.equal(summary.pairCount, 4);
+});
+
+test("summariseDepth 对空输入不崩", () => {
+  assert.deepEqual(summariseDepth({ rows: [], pairCount: 0, tiers: [] }), { pairCount: 0, byTier: [], deadPairs: 0 });
+  assert.deepEqual(summariseDepth({}), { pairCount: 0, byTier: [], deadPairs: 0 });
 });
