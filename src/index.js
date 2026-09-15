@@ -284,7 +284,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 
   const server = createServer({ store, config, healthSnapshot, logger });
   await new Promise((resolve) => server.listen(config.server.port, config.server.host, resolve));
-  logger.info(`HTTP API 监听 http://${config.server.host}:${config.server.port}`);
+  // 用实际绑定的端口，而不是配置值：配置为 0 时内核会挑一个，
+  // 打配置值会报出一个根本没人监听的地址。
+  logger.info(`HTTP API 监听 http://${config.server.host}:${server.address().port}`);
 
   const wakeup = createWakeup();
   let stopping = false;

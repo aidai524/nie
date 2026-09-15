@@ -175,7 +175,10 @@ export function validate(cfg) {
   if (typeof cfg.server?.host !== "string" || cfg.server.host.trim() === "") {
     issues.push("server.host 不能为空字符串");
   }
-  requireInt(issues, "server.port", cfg.server?.port, 1, 65535);
+  // 下端 0，上端 65535。端口 0 在 Node 里是「让内核挑一个空闲端口」的标准写法，
+  // 测试用它就不会与本地正在跑的服务撞端口。main 会把实际绑定的端口打进日志，
+  // 所以配了 0 也不会把人送进一个“日志里写着 8787、其实没人监听”的坑。
+  requireInt(issues, "server.port", cfg.server?.port, 0, 65535);
   if (typeof cfg.server?.cors !== "string") issues.push("server.cors 必须是字符串");
   if (typeof cfg.server?.bearerToken !== "string") issues.push("server.bearerToken 必须是字符串");
 

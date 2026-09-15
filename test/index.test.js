@@ -366,7 +366,7 @@ const writeConfig = (dir, overrides = {}) => {
     pairs: [{ from: "near:USDC", to: "eth:USDC" }],
     addresses: { near: "monitor.near", eth: "0xADDR" },
     slack: { enabled: false, webhookUrl: "", digest: { enabled: false } },
-    server: { host: "127.0.0.1", port: 8787, cors: "*", bearerToken: "" },
+    server: { host: "127.0.0.1", port: 0, cors: "*", bearerToken: "" },
     ...overrides,
   }));
   return configPath;
