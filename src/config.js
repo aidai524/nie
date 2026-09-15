@@ -44,6 +44,12 @@ export const DEFAULT_CONFIG = {
     BNB: "0.1", AVAX: "5", POL: "100", TRX: "100", ZEC: "0.5",
   },
   addresses: { ...DEFAULT_ADDRESSES },
+  depth: {
+    enabled: true,
+    intervalSec: 900,
+    tiers: [100, 1000, 10000, 100000, 1000000],
+    concurrency: 3,
+  },
   pairs: [],
   detect: { priceDeviationPct: 10, minSamples: 5, realertMinutes: 30, rollingWindowMinutes: 60 },
   slack: {
@@ -168,6 +174,32 @@ export function validate(cfg) {
     issues.push("slack.enabled 为 true 时 slack.webhookUrl 不能为空（可用环境变量 SLACK_WEBHOOK_URL 提供），或显式设为 enabled: false");
   }
   requireInt(issues, "slack.digest.hourLocal", cfg.slack?.digest?.hourLocal, 0, 23);
+
+requireInt(issues, "depth.intervalSec", cfg.depth?.intervalSec, 60);
+  requireInt(issues, "depth.concurrency", cfg.depth?.concurrency, 1, 50);
+  if (typeof cfg.depth?.enabled !== "boolean") {
+    issues.push(`depth.enabled 必须是布尔值，当前为 ${JSON.stringify(cfg.depth?.enabled)}`);
+  }
+  // 关闭时允许留空数组，否则必须是非空、严格递增的正整数数组且不超过 10 项
+  if (cfg.depth?.enabled !== false) {
+    const tiers = cfg.depth?.tiers;
+    if (!Array.isArray(tiers) || tiers.length === 0) {
+      issues.push("depth.tiers 必须是非空数组");
+    } else {
+      if (tiers.length > 10) {
+        issues.push(`depth.tiers 最多 10 项（当前 ${tiers.length} 项）—— 每多一项都会成倍增加对方 API 的负载`);
+      }
+      tiers.forEach((tier, index) => {
+        if (!Number.isInteger(tier) || tier <= 0) {
+          issues.push(`depth.tiers[${index}] 必须是正整数，当前为 ${JSON.stringify(tier)}`);
+          return;
+        }
+        if (index > 0 && Number.isInteger(tiers[index - 1]) && tier <= tiers[index - 1]) {
+          issues.push(`depth.tiers 必须严格递增，但 tiers[${index}] (${tier}) 不大于 tiers[${index - 1}] (${tiers[index - 1]})`);
+        }
+      });
+    }
+  }
 
   requireInt(issues, "retention.rawDays", cfg.retention?.rawDays, 0);
   requireInt(issues, "retention.hourlyDays", cfg.retention?.hourlyDays, 0);
