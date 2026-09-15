@@ -290,7 +290,12 @@ export function depthCell({ pairId, depth, index }) {
     return { text: "?", title: "还没有扫描过（最长等一个扫描间隔）" };
   }
   const entry = index?.get(pairId);
-  if (!entry || entry.maxTierUsd === null) {
+  // 「本次没测它」与「测了但都做不了」必须分开：前者是 ?（未知），后者才是 —（确定都做不了）。
+  // 前者正是那些哨兵坏掉、拿不到价格因而无法折算金额的币对 —— 显示「—」会把它们谎报成做不了。
+  if (!entry) {
+    return { text: "?", title: "这一对本次没有被扫描（一小时内没有成功报价，无法折算金额）" };
+  }
+  if (entry.maxTierUsd === null) {
     return { text: "—", title: "所有档位都没有报价" };
   }
   return { text: formatTier(entry.maxTierUsd), title: "最大可通档位（名义美元）；点开这一行看完整曲线" };

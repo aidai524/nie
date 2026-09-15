@@ -1270,11 +1270,22 @@ test("depthCell：接口没取到时（depth 为 null）给问号，不崩", () 
   assert.equal(depthCell({ pairId: "x", depth: undefined, index: undefined }).text, "?");
 });
 
-test("depthCell：该对没有深度数据时给破折号（不能在白名单外瞎显示）", () => {
+test("depthCell：该对本次没被扫描时给问号，而不是声称「都做不了」", () => {
+  // 扫描跑过了（ts 非 null），但 rows 里没有这一对 —— 它因为一小时内没有成功报价而无法折算金额。
+  // 显示「—」会读成「所有档位都做不了」，那是谎报；实际是「本次没测它」。
   const rows = [depthRow(100, true, { pairId: "other:PAIR" })];
   const depth = sweepDepth(rows);
   const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
+  assert.equal(cell.text, "?");
+  assert.ok(cell.title.includes("没有被扫描"), `tooltip 应说明未被扫描，实际: ${cell.title}`);
+});
+
+test("depthCell：真的所有档位都不通时才是破折号", () => {
+  const rows = [depthRow(100, false), depthRow(1000, false)];
+  const depth = sweepDepth(rows);
+  const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
   assert.equal(cell.text, "—");
+  assert.ok(cell.title.includes("所有档位都没有报价"));
 });
 
 test("depthCurveFor 按档位升序给出曲线，含成本与对方原文", () => {
@@ -1363,7 +1374,12 @@ export function depthCell({ pairId, depth, index }) {
     return { text: "?", title: "还没有扫描过（最长等一个扫描间隔）" };
   }
   const entry = index?.get(pairId);
-  if (!entry || entry.maxTierUsd === null) {
+  // 「本次没测它」与「测了但都做不了」必须分开：前者是 ?（未知），后者才是 —（确定都做不了）。
+  // 前者正是那些哨兵坏掉、拿不到价格因而无法折算金额的币对 —— 显示「—」会把它们谎报成做不了。
+  if (!entry) {
+    return { text: "?", title: "这一对本次没有被扫描（一小时内没有成功报价，无法折算金额）" };
+  }
+  if (entry.maxTierUsd === null) {
     return { text: "—", title: "所有档位都没有报价" };
   }
   return { text: formatTier(entry.maxTierUsd), title: "最大可通档位（名义美元）；点开这一行看完整曲线" };
@@ -1521,7 +1537,7 @@ function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
 - [ ] **Step 6: 跑测试确认通过**
 
 Run: `npm test`
-Expected: PASS —— 新增 9 个用例，总数 **280**，输出干净
+Expected: PASS —— 新增 10 个用例，总数 **281**，输出干净
 
 - [ ] **Step 7: 提交**
 

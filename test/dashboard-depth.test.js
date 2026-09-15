@@ -108,11 +108,22 @@ test("depthCell：接口没取到时（depth 为 null）给问号，不崩", () 
   assert.equal(depthCell({ pairId: "x", depth: undefined, index: undefined }).text, "?");
 });
 
-test("depthCell：该对没有深度数据时给破折号（不能在白名单外瞎显示）", () => {
+test("depthCell：该对本次没被扫描时给问号，而不是声称「都做不了」", () => {
+  // 扫描跑过了（ts 非 null），但 rows 里没有这一对 —— 它因为一小时内没有成功报价而无法折算金额。
+  // 显示「—」会读成「所有档位都做不了」，那是谎报；实际是「本次没测它」。
   const rows = [depthRow(100, true, { pairId: "other:PAIR" })];
   const depth = sweepDepth(rows);
   const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
+  assert.equal(cell.text, "?");
+  assert.ok(cell.title.includes("没有被扫描"), `tooltip 应说明未被扫描，实际: ${cell.title}`);
+});
+
+test("depthCell：真的所有档位都不通时才是破折号", () => {
+  const rows = [depthRow(100, false), depthRow(1000, false)];
+  const depth = sweepDepth(rows);
+  const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
   assert.equal(cell.text, "—");
+  assert.ok(cell.title.includes("所有档位都没有报价"));
 });
 
 test("depthCurveFor 按档位升序给出曲线，含成本与对方原文", () => {
