@@ -221,3 +221,283 @@ export function buildRows({ pairs = [], latest = [], stats = [], nowIso }) {
   }
   return rows;
 }
+
+
+// ============================================================================
+// 装配区
+//
+// 以下代码碰 DOM 与网络，因此没有单测 —— 它只做三件事：取数、调纯函数、
+// 把结果赋给 DOM。所有判断与算术都在上面的纯函数区里。
+// 唯一防回归的自动化检查是 test/dashboard-dom.test.js：它静态比对 init() 要的
+// 每个 id 都真的存在于 index.html 里 —— 因为「id 写错拿到 null」是这里最可能的错。
+// ============================================================================
+
+const REFRESH_MS = 30000;
+const MAX_BACKOFF_MS = 120000;
+const TOKEN_STORAGE_KEY = "nearintents.token";
+
+export function init() {
+  const el = {
+    counts: document.getElementById("counts"),
+    freshness: document.getElementById("freshness"),
+    banner: document.getElementById("banner"),
+    tbody: document.getElementById("tbody"),
+    empty: document.getElementById("empty"),
+    shownCount: document.getElementById("shown-count"),
+    onlyProblems: document.getElementById("only-problems"),
+    chainSelect: document.getElementById("chain-select"),
+    search: document.getElementById("search"),
+    refresh: document.getElementById("refresh"),
+    tokenBox: document.getElementById("token-box"),
+    tokenInput: document.getElementById("token-input"),
+    tokenSave: document.getElementById("token-save"),
+  };
+
+  const state = {
+    pairs: [],
+    rows: [],
+    health: null,
+    lastLoadedAt: null,
+    failures: 0,
+    chainsBuilt: false,
+    timer: null,
+    inFlight: false,
+  };
+
+  const readToken = () => {
+    try { return localStorage.getItem(TOKEN_STORAGE_KEY) ?? ""; } catch { return ""; }
+  };
+
+  async function apiGet(path, { allowStatus = [] } = {}) {
+    const headers = { Accept: "application/json" };
+    const token = readToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(path, { headers });
+    if (response.status === 401) {
+      const error = new Error("需要访问令牌");
+      error.needsToken = true;
+      throw error;
+    }
+    if (!response.ok && !allowStatus.includes(response.status)) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return response.json();
+  }
+
+  function setBanner(message, kind) {
+    if (!message) {
+      el.banner.hidden = true;
+      el.banner.textContent = "";
+      el.banner.className = "banner";
+      return;
+    }
+    el.banner.hidden = false;
+    el.banner.textContent = message;
+    el.banner.className = `banner ${kind ?? ""}`.trim();
+  }
+
+  const currentFilters = () => ({
+    onlyProblems: el.onlyProblems.checked,
+    chain: el.chainSelect.value,
+    query: el.search.value,
+  });
+
+  function renderFreshness() {
+    if (state.lastLoadedAt === null) {
+      el.freshness.textContent = "正在加载…";
+      el.freshness.className = "";
+      return;
+    }
+    const parts = [`最后更新 ${formatRelativeTime(state.lastLoadedAt, new Date().toISOString())}`];
+    // 陈旧与否直接采信服务端的判定（/health 的 ok），不自己拿 intervalSec 重算 ——
+    // 那个值不在 API 里，重算就会和服务端说法不一致。
+    if (state.health?.ok === false) parts.push("采集已陈旧");
+    if (state.health?.consecutiveRoundErrors > 0) parts.push(`采集轮次连续失败 ${state.health.consecutiveRoundErrors} 次`);
+    el.freshness.textContent = parts.join(" · ");
+    el.freshness.className = state.health?.ok === false ? "warn" : "";
+  }
+
+  function renderChains() {
+    if (state.chainsBuilt) return;
+    for (const chain of collectChains(state.pairs)) {
+      const option = document.createElement("option");
+      option.value = chain;
+      option.textContent = chain;
+      el.chainSelect.append(option);
+    }
+    state.chainsBuilt = true;
+  }
+
+  function cell(text, className) {
+    const td = document.createElement("td");
+    // 一律 textContent：errorMessage 是对方返回的任意字符串，走 innerHTML 就是注入面
+    td.textContent = text ?? "";
+    if (className) td.className = className;
+    return td;
+  }
+
+  function toggleDetail(row, anchor) {
+    const selector = `tr[data-detail="${row.pairId}"]`;
+    const existing = el.tbody.querySelector(selector);
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    const tr = document.createElement("tr");
+    tr.className = "detail";
+    tr.dataset.detail = row.pairId;
+    const td = document.createElement("td");
+    td.colSpan = 8;
+    const items = [
+      ["correlationId", row.detail.correlationId],
+      ["HTTP", row.detail.httpStatus],
+      ["最小收得", row.detail.minAmountOut],
+      ["最小付出", row.detail.minAmountIn],
+      ["预估耗时", `${row.detail.timeEstimate}s`],
+      ["swapType", row.detail.swapType],
+      ["配置金额", row.detail.configuredAmount],
+      ["连续失败", row.detail.consecutiveFailures],
+      ["状态自", row.detail.statusSince],
+    ];
+    for (const [key, value] of items) {
+      const span = document.createElement("span");
+      span.className = "kv";
+      const label = document.createElement("b");
+      label.textContent = key;
+      span.append(label, document.createTextNode(` ${value}`));
+      td.append(span);
+    }
+    tr.append(td);
+    tr.addEventListener("click", () => tr.remove());
+    anchor.after(tr);
+  }
+
+  function buildRowElement(row) {
+    const tr = document.createElement("tr");
+    tr.className = `row ${row.status ?? "unknown"}`;
+    tr.append(
+      cell(row.label, "pair"),
+      cell(row.statusLabel, `status ${row.status ?? "unknown"}`),
+      cell(`${row.payText} → ${row.receiveText}`, "amount"),
+      cell(row.usdText, "usd"),
+      cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
+      cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn" : "latency"),
+      cell(row.lastQuoteText, "time"),
+      cell(row.note, `note ${row.noteClass}`.trim()),
+    );
+    if (row.lastQuoteTitle) tr.children[6].title = row.lastQuoteTitle;
+    if (row.deviationMuted) tr.children[4].title = "样本不足，服务端此时不会判定偏离；仅供参考";
+    if (row.detail) {
+      tr.classList.add("clickable");
+      tr.addEventListener("click", () => toggleDetail(row, tr));
+    }
+    return tr;
+  }
+
+  function renderRows() {
+    const filtered = applyFilters(sortRows(state.rows), currentFilters());
+    el.shownCount.textContent = filtered.length === state.rows.length
+      ? `共 ${state.rows.length} 对`
+      : `显示 ${filtered.length} / ${state.rows.length} 对`;
+    el.tbody.replaceChildren();
+    for (const row of filtered) el.tbody.append(buildRowElement(row));
+    const noData = state.rows.length === 0;
+    el.empty.hidden = !noData;
+    if (noData) el.empty.textContent = "服务在跑，但还没有采集到任何报价 —— 等一轮（约 1 分钟）后刷新。";
+  }
+
+  async function load() {
+    if (state.inFlight) return;
+    state.inFlight = true;
+    try {
+      const [latest, stats, health] = await Promise.all([
+        apiGet("/latest"),
+        apiGet("/stats?window=1h"),
+        // /health 在陈旧时回 503，但「陈旧」这件事本身正是我们要读的，所以允许 503
+        apiGet("/health", { allowStatus: [503] }),
+      ]);
+      state.health = health;
+      state.rows = buildRows({
+        pairs: state.pairs,
+        latest: latest.latest ?? [],
+        stats: stats.pairs ?? [],
+        nowIso: new Date().toISOString(),
+      });
+      state.lastLoadedAt = new Date().toISOString();
+      state.failures = 0;
+      el.tokenBox.hidden = true;
+      setBanner("", null);
+      const counts = summarise(state.rows);
+      el.counts.textContent = `${counts.ok} 正常 · ${counts.deviant} 偏离 · ${counts.error} 失败`;
+      renderRows();
+    } catch (error) {
+      state.failures += 1;
+      if (error.needsToken) {
+        el.tokenBox.hidden = false;
+        setBanner("接口返回 401：服务配了访问令牌，请在下方填入。", "warn");
+      } else {
+        // 保留上一次的数据继续显示 —— 陈旧但真实的数据比空白有用，但必须标注陈旧
+        setBanner(`服务不可达（已重试 ${state.failures} 次）：${error.message}`, "err");
+      }
+    } finally {
+      state.inFlight = false;
+      renderFreshness();
+    }
+  }
+
+  async function bootstrap() {
+    try {
+      const pairs = await apiGet("/pairs");
+      state.pairs = pairs.pairs ?? [];
+      renderChains();
+      await load();
+    } catch (error) {
+      if (error.needsToken) {
+        el.tokenBox.hidden = false;
+        setBanner("接口返回 401：服务配了访问令牌，请在下方填入。", "warn");
+      } else {
+        setBanner(`服务不可达：${error.message}`, "err");
+      }
+      renderFreshness();
+    }
+  }
+
+  function schedule() {
+    if (state.timer !== null) clearTimeout(state.timer);
+    // 后台标签页不轮询；重新可见时会立刻刷一次
+    if (document.visibilityState === "hidden") return;
+    const wait = Math.min(REFRESH_MS * Math.max(1, state.failures), MAX_BACKOFF_MS);
+    state.timer = setTimeout(async () => {
+      await load();
+      schedule();
+    }, wait);
+  }
+
+  el.refresh.addEventListener("click", async () => {
+    await load();
+    schedule();
+  });
+  el.onlyProblems.addEventListener("change", renderRows);
+  el.chainSelect.addEventListener("change", renderRows);
+  el.search.addEventListener("input", renderRows);
+  el.tokenSave.addEventListener("click", async () => {
+    try { localStorage.setItem(TOKEN_STORAGE_KEY, el.tokenInput.value.trim()); } catch { /* 隐私模式下存不了，忽略 */ }
+    state.failures = 0;
+    await bootstrap();
+    schedule();
+  });
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState === "visible") {
+      await load();
+      schedule();
+    } else if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+  });
+
+  // 「最后更新 N 秒前」要自己跳秒，否则一个每分钟才变的面板看起来是死的
+  setInterval(renderFreshness, 1000);
+  bootstrap().then(schedule);
+}
+
