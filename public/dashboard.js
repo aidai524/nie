@@ -69,9 +69,39 @@ export function computeDeviationPct(amountIn, median) {
   return ((value - base) / base) * 100;
 }
 
+/** 四舍五入到零的数不该带负号：-0.0000012 会得到 "-0.00"，看起来像坏了 */
+function withoutNegativeZero(text) {
+  return text === "-0.00" ? "0.00" : text;
+}
+
 export function formatDeviation(pct) {
   if (pct === null || pct === undefined || !Number.isFinite(pct)) return "—";
-  return `${pct > 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  const rounded = withoutNegativeZero(pct.toFixed(2));
+  // 符号也按**舍入后**的字串决定，否则 0.0000012 会显示成 "+0.00%"
+  const sign = rounded.startsWith("-") || rounded === "0.00" ? "" : "+";
+  return `${sign}${rounded}%`;
+}
+
+/**
+ * 这次报价的总损耗（%）：按美元计价，(付出 − 收到) / 付出。
+ *
+ * 必须用美元金额，不能拿 amountIn/amountOut 的最小单位相除 —— 后者在两个 token
+ * 小数位不同时会算出天文数字：实测 bsc:USDC（18 位）→ near:USDC（6 位）得到
+ * 100110509950192%。美元口径与小数位、与币价都无关，所以对所有币对都成立。
+ */
+export function computeCostPct(amountInUsd, amountOutUsd) {
+  if (amountInUsd === null || amountInUsd === undefined) return null;
+  if (amountOutUsd === null || amountOutUsd === undefined) return null;
+  const paid = Number(amountInUsd);
+  const received = Number(amountOutUsd);
+  if (!Number.isFinite(paid) || !Number.isFinite(received) || paid === 0) return null;
+  return ((paid - received) / paid) * 100;
+}
+
+/** 成本不加正号（它本来就是个损耗），但负号要保留（收到的比付出的更值钱）*/
+export function formatCostPct(pct) {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "—";
+  return `${withoutNegativeZero(pct.toFixed(2))}%`;
 }
 
 /** nowIso 必须由调用方传入，否则这个函数无法测试。 */
@@ -155,6 +185,7 @@ function buildRow({ pair, quote, stat, nowIso }) {
   const amountIn = convert(quote?.amountIn, pair?.fromDecimals);
   const amountOut = convert(quote?.amountOut, pair?.toDecimals);
   const deviationPct = quote?.ok ? computeDeviationPct(quote?.amountIn, stat?.metric?.median ?? null) : null;
+  const costPct = quote?.ok ? computeCostPct(quote?.amountInUsd, quote?.amountOutUsd) : null;
   const lowSample = !(stat && Number.isFinite(stat.okN) && stat.okN >= LOW_SAMPLE_THRESHOLD);
 
   let note = "";
@@ -180,6 +211,7 @@ function buildRow({ pair, quote, stat, nowIso }) {
     payText: quote?.ok ? formatAmount(amountIn) : "—",
     receiveText: quote?.ok ? formatAmount(amountOut) : "—",
     usdText: quote?.amountInUsd == null ? "—" : `$${formatAmount(Number(quote.amountInUsd))}`,
+    costText: formatCostPct(costPct),
     deviationText: quote?.ok ? formatDeviation(deviationPct) : "—",
     deviationMuted: quote?.ok ? lowSample : false,
     latencyMs: quote?.latencyMs ?? null,
@@ -347,7 +379,7 @@ export function init() {
     tr.className = "detail";
     tr.dataset.detail = row.pairId;
     const td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 9;
     const items = [
       ["correlationId", row.detail.correlationId],
       ["HTTP", row.detail.httpStatus],
@@ -375,18 +407,21 @@ export function init() {
   function buildRowElement(row) {
     const tr = document.createElement("tr");
     tr.className = `row ${row.status ?? "unknown"}`;
-    tr.append(
-      cell(row.label, "pair"),
-      cell(row.statusLabel, `status ${row.status ?? "unknown"}`),
-      cell(`${row.payText} → ${row.receiveText}`, "amount"),
-      cell(row.usdText, "usd"),
-      cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
-      cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn" : "latency"),
-      cell(row.lastQuoteText, "time"),
-      cell(row.note, `note ${row.noteClass}`.trim()),
-    );
-    if (row.lastQuoteTitle) tr.children[6].title = row.lastQuoteTitle;
-    if (row.deviationMuted) tr.children[4].title = "样本不足，服务端此时不会判定偏离；仅供参考";
+    // 用命名变量而不是 tr.children[N]：列的位置会变，下标不会自己跟着变
+    const cells = {
+      pair: cell(row.label, "pair"),
+      status: cell(row.statusLabel, `status ${row.status ?? "unknown"}`),
+      amount: cell(`${row.payText} → ${row.receiveText}`, "amount"),
+      cost: cell(row.costText, "cost"),
+      usd: cell(row.usdText, "usd hide-narrow"),
+      deviation: cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
+      latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn" : "latency hide-narrow"),
+      time: cell(row.lastQuoteText, "time"),
+      note: cell(row.note, `note ${row.noteClass}`.trim()),
+    };
+    if (row.lastQuoteTitle) cells.time.title = row.lastQuoteTitle;
+    if (row.deviationMuted) cells.deviation.title = "样本不足，服务端此时不会判定偏离；仅供参考";
+    tr.append(cells.pair, cells.status, cells.amount, cells.cost, cells.usd, cells.deviation, cells.latency, cells.time, cells.note);
     if (row.detail) {
       tr.classList.add("clickable");
       tr.addEventListener("click", () => toggleDetail(row, tr));

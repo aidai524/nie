@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   toHumanAmount, formatAmount, formatDeviation, formatRelativeTime,
-  computeDeviationPct, buildRows, summarise, sortRows, applyFilters,
+  computeDeviationPct, computeCostPct, formatCostPct, buildRows, summarise, sortRows, applyFilters,
   collectChains, STATUS_LABELS,
 } from "../public/dashboard.js";
 
@@ -104,11 +104,53 @@ test("computeDeviationPct 在 median 缺失或为 0 时返回 null（不除零�
   assert.equal(computeDeviationPct("abc", 100), null);
 });
 
+test("formatDeviation 四舍五入到零时不带负号（实测 −0.0000012% 会显示成 -0.00%，看起来像坏了）", () => {
+  assert.equal(formatDeviation(-0.0000012), "0.00%");
+  assert.equal(formatDeviation(0.0000012), "0.00%");
+  assert.equal(formatDeviation(-0.004), "0.00%");
+  assert.equal(formatDeviation(-0.006), "-0.01%", "真正舍入到 -0.01 的仍要带负号");
+  assert.equal(formatDeviation(0.006), "+0.01%");
+});
+
 test("formatDeviation 带正负号与两位小数", () => {
   assert.equal(formatDeviation(1.3013), "+1.30%");
   assert.equal(formatDeviation(-0.5), "-0.50%");
   assert.equal(formatDeviation(0), "0.00%");
   assert.equal(formatDeviation(null), "—");
+});
+
+// ---------- computeCostPct / formatCostPct ----------
+
+test("computeCostPct 用美元口径算这次报价的总损耗", () => {
+  // 实测样本：付出 1501.7387 美元的币，收到 1499.7840 美元
+  assert.ok(Math.abs(computeCostPct("1501.7387", "1499.784") - 0.1302) < 0.0001);
+  assert.equal(computeCostPct("1500", "1500"), 0);
+});
+
+test("computeCostPct 只看美元金额，所以两个 token 小数位不同也不受影响", () => {
+  // bsc:USDC 是 18 位小数、near:USDC 是 6 位。若拿最小单位相除会得到
+  // 100110509950192%（实测），而美元口径给出正常的 0.11%。
+  assert.ok(Math.abs(computeCostPct("1501.6", "1499.9") - 0.1132) < 0.0001);
+});
+
+test("computeCostPct 对缺失或非正的分母返回 null", () => {
+  assert.equal(computeCostPct(null, "1500"), null);
+  assert.equal(computeCostPct("1500", null), null);
+  assert.equal(computeCostPct("0", "1500"), null);
+  assert.equal(computeCostPct("abc", "1500"), null);
+  assert.equal(computeCostPct(undefined, undefined), null);
+});
+
+test("computeCostPct 对「收到的比付出的更值钱」保留负号", () => {
+  assert.ok(computeCostPct("1500", "1501") < 0);
+});
+
+test("formatCostPct 不带正号，且不在零上留负号", () => {
+  assert.equal(formatCostPct(0.1302), "0.13%");
+  assert.equal(formatCostPct(0), "0.00%");
+  assert.equal(formatCostPct(-0.0000012), "0.00%");
+  assert.equal(formatCostPct(-0.5), "-0.50%");
+  assert.equal(formatCostPct(null), "—");
 });
 
 // ---------- formatRelativeTime ----------
@@ -146,6 +188,27 @@ test("buildRows 关联 /pairs 与 /latest，并用 from/to 的 decimals 分别�
   assert.equal(row.payText, "1,501.96", "amountIn 用 fromDecimals=6");
   assert.equal(row.receiveText, "0.5", "amountOut 用 toDecimals=8");
   assert.equal(row.usdText, "$1,501.73");
+});
+
+test("buildRows 给出成本列（美元口径），而不是只把 付/得 摆在那里让人自己看", () => {
+  const [row] = buildRows({ pairs: [PAIR_A], latest: [quote(PAIR_A.id)], stats: [], nowIso: NOW });
+  // 夹具里 amountInUsd 1501.73 / amountOutUsd 1499.78 → (1501.73-1499.78)/1501.73 = 0.1298%
+  assert.equal(row.costText, "0.13%");
+});
+
+test("buildRows 在美元缺失或报价失败时成本列给破折号", () => {
+  const [missing] = buildRows({
+    pairs: [PAIR_A], latest: [quote(PAIR_A.id, { amountInUsd: null, amountOutUsd: null })], stats: [], nowIso: NOW,
+  });
+  assert.equal(missing.costText, "—", "没有美元金额就没法算成本，不能瞎编");
+  const [partial] = buildRows({
+    pairs: [PAIR_A], latest: [quote(PAIR_A.id, { amountOutUsd: null })], stats: [], nowIso: NOW,
+  });
+  assert.equal(partial.costText, "—");
+  const [failed] = buildRows({
+    pairs: [PAIR_A], latest: [quote(PAIR_A.id, { ok: false, stateStatus: "error" })], stats: [], nowIso: NOW,
+  });
+  assert.equal(failed.costText, "—");
 });
 
 test("buildRows 的偏离取自 /stats 的 metric.median，样本不足时标记但不隐藏数字", () => {

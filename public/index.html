@@ -84,7 +84,7 @@
     tr.row.clickable { cursor: pointer; }
     tr.row:hover { background: #1c2029; }
 
-    td.pair, td.amount, td.usd, td.latency, td.time { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+    td.pair, td.amount, td.cost, td.usd, td.latency, td.time { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
     td.usd { color: var(--muted); }
     td.note { color: var(--muted); font-size: 12px; }
     td.note.err { color: var(--err); }
@@ -105,7 +105,8 @@
     .empty { color: var(--muted); padding: 16px 0; }
 
     @media (max-width: 900px) {
-      th:nth-child(4), td:nth-child(4), th:nth-child(6), td:nth-child(6) { display: none; }
+      /* 用类名而不是 nth-child：列的位置会变，下标不会自己跟着变 */
+      .hide-narrow { display: none; }
       td.note { max-width: 220px; }
     }
   </style>
@@ -146,9 +147,10 @@
           <th>币对</th>
           <th>状态</th>
           <th>付 → 得</th>
-          <th>USD</th>
-          <th>偏离</th>
-          <th>延迟</th>
+          <th title="按美元计价：(付出 − 收到) / 付出。含对方手续费与桥接费，与两个 token 的小数位无关">成本</th>
+          <th class="hide-narrow">USD</th>
+          <th title="当前报价相对近 1 小时成功报价中位数的变化。与告警判定用的是同一个数">较基准</th>
+          <th class="hide-narrow">延迟</th>
           <th>最后报价</th>
           <th>备注</th>
         </tr>
