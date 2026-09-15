@@ -64,7 +64,7 @@ GET /health               → { ok, startedAt, lastRoundTs, lastRoundAgeMs, last
 
 | 方案 | 说明 | 判断 |
 |---|---|---|
-| **A. 静态文件 + 定时轮询** | 页面每 30 秒并行拉 `/latest` 与 `/stats?window=1h`，纯前端渲染；后端只加一条静态路由 | **采用**。后端已经为它准备好了（CORS、`res=raw\|hourly`、`window=1h\|24h\|7d`），轮询 30 秒对 1 分钟一轮的采集节奏完全够用 |
+| **A. 静态文件 + 定时轮询** | 页面每 30 秒并行拉 `/latest`、`/stats?window=1h`、`/health`，纯前端渲染；后端只加一条静态路由 | **采用**。后端已经为它准备好了（CORS、`res=raw\|hourly`、`window=1h\|24h\|7d`），轮询 30 秒对 1 分钟一轮的采集节奏完全够用 |
 | B. 后端 SSE / WebSocket 推送 | 数据一变即推 | 否。要在已经合并送审过的后端里加事件流与连接生命周期管理，收益只是把延迟从 30 秒压到 0；而数据本身每 60 秒才更新一次，延迟下限是采集周期，不是传输方式 |
 | C. 只手动刷新 | 不自动轮询 | 否。面板的价值就是「扫一眼」，手动刷新等于没有面板 |
 
@@ -148,7 +148,7 @@ GET /health               → { ok, startedAt, lastRoundTs, lastRoundAgeMs, last
 **请求编排**：
 
 - 启动时一次：`/pairs`（币对表 + decimals + 配置金额），失败则整页显示「服务不可达」
-- **每次刷新并行發三个**：`/latest`、`/stats?window=1h`、`/health`。三个 payload 都很小（38 对量级），但 `/health` 是判断「服务活着但采集停了」的唯一手段，不能等出错才拉
+- **每次刷新并行发三个**：`/latest`、`/stats?window=1h`、`/health`。三个 payload 都很小（38 对量级），但 `/health` 是判断「服务活着但采集停了」的唯一手段，不能等出错才拉
 - **不做单币对下拉查询** —— 38 对全量拉一次比按下钻再查更便宜，也省掉缓存与失效逻辑
 
 **节奏**：
