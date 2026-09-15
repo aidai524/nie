@@ -77,7 +77,7 @@ GET /health               → { ok, startedAt, lastRoundTs, lastRoundAgeMs, last
 ├ 过滤 ─────────────────────────────────────────────────────────────┤
 │ [全部 | 仅异常]  [链 ▾]  [搜索币对…]                               │
 ├ 主表 ─────────────────────────────────────────────────────────────┤
-│ 币对 │ 状态 │ 付 → 得 │ USD │ 偏离 │ 延迟 │ 最后报价 │ 备注        │
+│ 币对 │ 状态 │ 付 → 得 │ 成本 │ USD │ 较基准 │ 延迟 │ 最后报价 │ 备注    │
 │ …点任意行展开详情…                                                │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -101,8 +101,9 @@ GET /health               → { ok, startedAt, lastRoundTs, lastRoundAgeMs, last
 | 币对 | `/pairs` 的 `fromKey → toKey` | |
 | 状态 | **`/latest` 的 `stateStatus`** | 见 §5.1。**不用 `/pairs` 里的 `state`** —— 那是启动那一刻的快照，到第二次刷新就陈旧了 |
 | 付 → 得 | `/latest` 的 `amountIn`、`amountOut` ÷ `10^decimals` | decimals 来自 `/pairs`；格式规则见下 |
+| 成本 | `(amountInUsd − amountOutUsd) / amountInUsd × 100` | 见 §5.2；保留 2 位小数 |
 | USD | `/latest` 的 `amountInUsd` | 只显示源侧；目标侧 USD 与它冗余 |
-| 偏离 | `(Number(amountIn) − stats.metric.median) / stats.metric.median × 100` | 见 §5.1；保留 2 位小数并带正负号 |
+| 较基准 | `(Number(amountIn) − stats.metric.median) / stats.metric.median × 100` | 见 §5.1；保留 2 位小数并带正负号 |
 | 延迟 | `/latest` 的 `latencyMs` | `> 5000` 标黄 |
 | 最后报价 | `/latest` 的 `ts` | 相对时间，`title` 里放绝对 ISO 时间 |
 | 备注 | `/latest` 的 `errorCode` + `errorMessage` | **直接显示对方返回的原文，不翻译** |
@@ -129,19 +130,32 @@ GET /health               → { ok, startedAt, lastRoundTs, lastRoundAgeMs, last
 
 **展开详情**（点行）：`correlationId`、`minAmountOut` vs `amountOut`、`stateFailures`（连续失败次数）、`httpStatus`、`timeEstimate`、`swapType`、该对的配置金额 `amount`。
 
-### 5.1 状态与偏离的口径（本设计最重要的一条）
+### 5.1 状态与较基准的口径（本设计最重要的一条）
 
 **状态列一律取 `stateStatus`（即服务端 `pair_state.status`），页面绝不自己判定状态。**
 
 理由：状态是服务端用**真实配置**下的 `detect.priceDeviationPct`（默认 10）与 `detect.minSamples`（默认 5）算出来的。这两个值都不在 API 里暴露。若页面自己拿 10 和 5 去判定，运维一旦改了配置，页面就会与告警说法不一致 —— 而会骗人的监控面板比没有面板更糟。
 
-**偏离列只做展示，不做判定**：
+**较基准列只做展示，不做判定**：
 
 - `stats.metric.median` 存在 → 显示百分比（如 `+1.30%`），正负号保留
 - 该对在 `/stats` 里没有条目，或 `metric` 为 `null` → 显示 `—`（窗口内没有可用的成功样本）
 - `stats.okN < 5` → 数字照常显示，但降饱和度渲染并在 `title` 里说明「样本 N 条，服务端样本不足时不判定偏离」。**不隐藏数字**：隐藏会让人以为「没有偏离」，而实际是「暂时测不准」
 
 **顶栏要显示当前阈值**（`阈值 10%（服务端配置）`）—— 因为页面不持有这个值，运维需要知道页面上的黄色是谁定的。
+
+### 5.2 成本列必须用美元口径
+
+`成本 = (amountInUsd − amountOutUsd) / amountInUsd × 100`。
+
+**不能用 `amountIn / amountOut − 1`。** 两个字段各自是所在链上的最小单位，小数位不同时相除毫无意义：
+实测 `bsc:USDC`（18 位）→ `near:USDC`（6 位）会得到 **100110509950192%**，`near:ETH`（18 位）→ `near:USDC`（6 位）得到 40408877828%。
+只有两边小数位相同的币对（如 `arb:USDC → near:USDC`）这个比值才凑巧看着合理 —— 那正是最容易让它蒙混过关的情形。
+
+美元口径与小数位、与币价都无关，所以对所有币对都成立。`amountInUsd` 或 `amountOutUsd` 任一缺失时显示 `—`，不猜。
+
+两列分工要写清楚，否则「付 1501.66 → 得 1500.00」旁边显示「较基准 0.00%」会被读成矛盾：
+**成本**回答「现在换要付多少代价」（与历史无关，一直在），**较基准**回答「这条路由是不是在变差」（相对它自己）。
 
 ## 6. 数据获取与刷新
 
@@ -190,14 +204,14 @@ const PUBLIC_FILES = {
 
 | 文件 | 职责 | 可测性 |
 |---|---|---|
-| `public/dashboard.js` | 纯函数：金额换算（base unit → 人类可读）、偏离计算、相对时间、排序优先级、状态归并、币对与报价的关联；以及一个 `init()` | 纯函数**不碰 `document`**，可被 `node:test` 直接 `import` 测试 |
+| `public/dashboard.js` | 纯函数：金额换算（base unit → 人类可读）、较基准与成本计算、相对时间、排序优先级、状态归并、币对与报价的关联；以及一个 `init()` | 纯函数**不碰 `document`**，可被 `node:test` 直接 `import` 测试 |
 | `public/index.html` | 标记 + 样式，`<script type="module" src="/dashboard.js">` 调用 `init()` | 不单测；靠手工冒烟 |
 
 约束：`public/dashboard.js` **在模块顶层不得访问 `document`/`window`/`fetch`**，否则 `node:test` 一 import 就炸。所有 DOM 与网络访问都关在 `init()` 及其下游函数里。
 
 **新增测试**：
 
-- `test/dashboard.test.js` —— 测纯函数：金额换算（§5 四条分档全部覆盖，含 6/8/18 位小数、`0.000001` 不显示为 `0.0000`、`null` 输入）、偏离计算（正负、`median` 为 `null`、`median` 为 0 的除零保护）、相对时间（秒/分/时/天、未来时间、`null`）、排序优先级（error < deviant < ok，同状态按 id）、`/pairs` 与 `/latest` 的关联（币对缺少 decimals、`/latest` 有而 `/pairs` 没有的孤儿行）
+- `test/dashboard.test.js` —— 测纯函数：金额换算（§5 四条分档全部覆盖，含 6/8/18 位小数、`0.000001` 不显示为 `0.0000`、`null` 输入）、较基准计算（正负、`median` 为 `null`、`median` 为 0 的除零保护、舍入到零时不带负号）、成本计算（美元口径、缺失美元时给 `—`）、相对时间（秒/分/时/天、未来时间、`null`）、排序优先级（error < deviant < ok，同状态按 id）、`/pairs` 与 `/latest` 的关联（币对缺少 decimals、`/latest` 有而 `/pairs` 没有的孤儿行）
 - `test/server.test.js` 追加 —— 静态路由：`GET /` 返回 200 + `text/html` + 内容含面板标题；`GET /dashboard.js` 返回 200 + `text/javascript`；未列出的路径仍 404（特别是 `/public/index.html` 与 `/../package.json` 必须 404，证明没有目录穿越）
 
 **手工冒烟**（唯一需要人眼的一步）：`npm start`，浏览器打开 `http://127.0.0.1:8787/`，对照 `data/monitor.db` 里的 5 条红对核实错误原文与状态色。

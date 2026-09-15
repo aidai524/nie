@@ -22,11 +22,16 @@ test("index.html 以模块方式加载 /dashboard.js 并调用 init()", () => {
 test("index.html 带上面板需要的静态文案块", () => {
   assert.ok(html.includes("NEAR Intents 报价监控"), "标题");
   assert.ok(html.includes("阈值 10%（服务端配置）"), "必须让人知道黄色是谁定的");
-  for (const header of ["币对", "状态", "付 → 得", "USD", "偏离", "延迟", "最后报价", "备注"]) {
+  for (const header of ["币对", "状态", "付 → 得", "成本", "USD", "较基准", "延迟", "最后报价", "备注"]) {
     assert.ok(html.includes(`>${header}<`), `表头缺少「${header}」`);
   }
 });
 
 test("index.html 没有内联事件处理器（CSP 友好，也避免注入面）", () => {
   assert.doesNotMatch(html, /\son[a-z]+\s*=/i);
+});
+
+test("两个容易误读的列名带上解释性 tooltip", () => {
+  assert.ok(html.includes("相对近 1 小时成功报价中位数"), "「较基准」必须说明它在跟什么比");
+  assert.ok(html.includes("按美元计价"), "「成本」必须说明口径 —— 否则会被读成付/得之差");
 });
