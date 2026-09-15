@@ -61,7 +61,7 @@ README.md             # 既有文件，追加「面板」一节 + 手工冒烟�
   - `collectChains(pairs): string[]`
   - `STATUS_LABELS: Record<string, string>`
 
-- [ ] **Step 1: 写失败测试 `test/dashboard.test.js`**
+- [x] **Step 1: 写失败测试 `test/dashboard.test.js`**
 
 ```js
 import { test } from "node:test";
@@ -366,12 +366,12 @@ test("collectChains 去重、排序，涵盖源与目标", () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test`
 Expected: FAIL —— `Cannot find module '../public/dashboard.js'`
 
-- [ ] **Step 3: 实现 `public/dashboard.js` 的纯函数区**
+- [x] **Step 3: 实现 `public/dashboard.js` 的纯函数区**
 
 ```js
 // ============================================================================
@@ -599,12 +599,12 @@ export function buildRows({ pairs = [], latest = [], stats = [], nowIso }) {
 }
 ```
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `npm test`
 Expected: PASS —— `test/dashboard.test.js` 31 个用例全过，总数 **211**，输出干净（已在写计划时离线跑过一遍验证过）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add public/dashboard.js test/dashboard.test.js
@@ -626,7 +626,7 @@ git commit -m "feat: 面板纯函数层，含金额换算、偏离、相对时�
 
 **关于这一层的测试**：`init()` 碰 DOM 与网络，仓库里没有 DOM 测试框架且不能加依赖，所以它没有单测。但它的失败模式是**可静态检查的**，所以 Task 2 配一条 `test/dashboard-dom.test.js`：从 `dashboard.js` 源码里正则取出 `getElementById("…")` 的全部 id，断言每一个都在 `index.html` 里以 `id="…"` 出现。它不证明渲染正确，只证明**`init()` 要的每个 id 都存在** —— 而写错 id 会静默拿到 `null`，正是这类页面最常见的崩溃方式。
 
-- [ ] **Step 1: 写失败测试 `test/dashboard-dom.test.js`**
+- [x] **Step 1: 写失败测试 `test/dashboard-dom.test.js`**
 
 ```js
 import { test } from "node:test";
@@ -663,12 +663,12 @@ test("index.html 没有内联事件处理器（CSP 友好，也避免注入面�
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test`
 Expected: FAIL —— `ENOENT: no such file or directory ... public/index.html`
 
-- [ ] **Step 3: 写 `public/index.html`**
+- [x] **Step 3: 写 `public/index.html`**
 
 ```html
 <!DOCTYPE html>
@@ -841,7 +841,7 @@ Expected: FAIL —— `ENOENT: no such file or directory ... public/index.html`
 </html>
 ```
 
-- [ ] **Step 4: 在 `public/dashboard.js` 末尾追加装配区**
+- [x] **Step 4: 在 `public/dashboard.js` 末尾追加装配区**
 
 在 Task 1 写的纯函数区之后**追加**（不要改动上面任何函数）：
 
@@ -1125,25 +1125,26 @@ export function init() {
 }
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `npm test`
 Expected: PASS —— 新增 4 个 DOM 契约用例，总数 **215**，输出干净
 
-- [ ] **Step 6: 手工看一眼（不联网也能看）**
+- [x] **Step 6: 确认两个文件落盘且可被解析**
 
-起服务后打开页面确认结构渲染出来：
+注意：**此处还看不到页面** —— 静态路由是 Task 3 才加的，现在 `curl localhost:8787/` 仍是 404。所以这一步只验证文件本身：
 
 ```bash
-npm start &
-curl -s localhost:8787/ | head -5          # 应看到 <!DOCTYPE html> 与标题
-curl -s localhost:8787/dashboard.js | head -3
-kill %1
+node --input-type=module -e 'await import("./public/dashboard.js"); console.log("dashboard.js 可被导入且导出 init:", typeof (await import("./public/dashboard.js")).init)'
+head -1 public/index.html      # 应为 <!DOCTYPE html>
+ls -la public/
 ```
 
-Expected：HTML 与 JS 都能取到；若 `npm start` 因还没跑过而库里没数据，页面应显示上面那条「等一轮」的空态而不是报错或白屏。
+Expected：`dashboard.js` 能被导入、`init` 是 `function`（这一点不显然：`init()` 内部引用 `document`，但**只在被调用时**才碰，所以 `node:test` 能安全 import 它 —— 这正是全局约束里那条存在的原因）；`index.html` 以 `<!DOCTYPE html>` 开头；两个文件都在 `public/` 下。
 
-- [ ] **Step 7: 提交**
+真正能看到页面是在 Task 3 加完路由之后。
+
+- [x] **Step 7: 提交**
 
 ```bash
 git add public/index.html public/dashboard.js test/dashboard-dom.test.js
@@ -1162,7 +1163,7 @@ git commit -m "feat: 面板页面本体与装配逻辑，含 DOM 契约测试"
 - Consumes: Task 2 产出的 `public/index.html` 与 `public/dashboard.js`
 - Produces: `GET /`、`GET /index.html`、`GET /dashboard.js` 三个静态响应；导出 `normalizePath(pathname)`
 
-- [ ] **Step 1: 写失败测试（追加到 `test/server.test.js` 末尾）**
+- [x] **Step 1: 写失败测试（追加到 `test/server.test.js` 末尾）**
 
 ```js
 test("GET / 返回面板 HTML", async () => {
@@ -1218,12 +1219,12 @@ test("静态文件响应也带 CORS 头", async () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `npm test`
 Expected: FAIL —— 上面 6 条中至少 4 条失败（`GET /` 返回 404 而不是 200）
 
-- [ ] **Step 3: 更新一条既有用例（本次唯一的既有行为变更）**
+- [x] **Step 3: 更新一条既有用例（本次唯一的既有行为变更）**
 
 `test/server.test.js` 里现有的 `带尾斜杠的路径也能匹配` 断言了 `GET /` 是 **404**。加了面板之后 `/` 就是面板本身，会返回 200 —— 所以这条断言**必须改**，否则 `npm test` 会红（已在写计划时预跑验证过）。把该用例整体换成：
 
@@ -1239,7 +1240,7 @@ test("带尾斜杠的路径也能匹配", async () => {
 });
 ```
 
-- [ ] **Step 4: 改 `src/server.js`（四处，都在既有代码的间隙里）**
+- [x] **Step 4: 改 `src/server.js`（四处，都在既有代码的间隙里）**
 
 (a) import 行：
 
@@ -1302,17 +1303,24 @@ function handle({ url, send, store, config, healthSnapshot }) {
     if (config.server.bearerToken) {
 ```
 
-- [ ] **Step 5: 跑测试确认通过**
+- [x] **Step 5: 跑测试确认通过**
 
 Run: `npm test`
 Expected: PASS —— 新增 6 个静态路由用例（另更新 1 条既有用例），总数 **221**，输出干净（已在写计划时应用全部改动预跑验证过：修复前 220/221，修复后全绿）
 
-- [ ] **Step 6: 确认既有行为没被改坏**
+- [x] **Step 6: 确认既有行为没被改坏，并且页面真的能打开**
 
-Run: `curl -s localhost:8787/health | head -c 200`（服务起着的话）
-Expected：`/health` 的 JSON 与改动前完全一致。特别是 `handle()` 里那一行归一化改动**必须**保持 `/health/` 仍能路由（既有用例「带尾斜杠的路径也能匹配」覆盖了这一点）。
+```bash
+npm start &
+curl -s localhost:8787/ | head -3           # 应看到 <!DOCTYPE html> 与标题
+curl -s -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8787/dashboard.js
+curl -s localhost:8787/health | head -c 200 # 应与改动前逐字一致
+kill -INT %1
+```
 
-- [ ] **Step 7: 提交**
+Expected：`/` 返回面板 HTML；`/dashboard.js` 返回 `200 text/javascript`；`/health` 的 JSON 与改动前完全一致。特别是 `handle()` 里那一行归一化改动**必须**保持 `/health/` 仍能路由（既有用例「带尾斜杠的路径也能匹配」覆盖了这一点）。若库里还没数据，页面应显示「等一轮」的空态而不是报错或白屏。
+
+- [x] **Step 7: 提交**
 
 ```bash
 git add src/server.js test/server.test.js
@@ -1330,7 +1338,7 @@ git commit -m "feat: 静态文件白名单路由，bearer 之前放行面板"
 - Consumes: 前面三个 Task 的全部产物
 - Produces: 给运维的「面板」一节与手工冒烟清单
 
-- [ ] **Step 1: 在 `README.md` 里加「面板」一节**
+- [x] **Step 1: 在 `README.md` 里加「面板」一节**
 
 放在 API 端点表之后。内容必须包含：
 
@@ -1342,7 +1350,7 @@ git commit -m "feat: 静态文件白名单路由，bearer 之前放行面板"
 - 配了 `server.bearerToken` 时：页面会弹出令牌输入框，令牌存在浏览器 localStorage，静态页面本身不校验令牌
 - 阈值来源：页面不持有 `detect.priceDeviationPct`，顶栏「阈值 10%（服务端配置）」是展示文案；**改配置后页面不需要改**
 
-- [ ] **Step 2: 在 README 的冒烟清单里加面板条目**
+- [x] **Step 2: 在 README 的冒烟清单里加面板条目**
 
 沿用既有「手工冒烟」的写法，加一段：
 
@@ -1358,7 +1366,7 @@ git commit -m "feat: 静态文件白名单路由，bearer 之前放行面板"
 7. 重新 `npm start`，约 30 秒内页面应自行恢复
 ```
 
-- [ ] **Step 3: 端到端手工验收（唯一需要人眼的一步）**
+- [x] **Step 3: 端到端手工验收（唯一需要人眼的一步）**
 
 ```bash
 npm start
@@ -1372,12 +1380,12 @@ npm start
 - 美元列与 `amountInUsd` 数量级一致
 - 偏离列带 `*` 的行，其 `okN` 确实小于 5
 
-- [ ] **Step 4: 跑全量测试**
+- [x] **Step 4: 跑全量测试**
 
 Run: `npm test`
 Expected: PASS —— **221** 个用例全过，输出干净
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add README.md

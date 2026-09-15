@@ -1,4 +1,5 @@
 import { createServer as createHttpServer } from "node:http";
+import { readFileSync } from "node:fs";
 
 /** 非法 limit 回退到 fallback，过大则封顶，避免被人一句 ?limit=99999999 把库拉爆 */
 function clampLimit(raw, fallback, maximum) {
@@ -10,8 +11,21 @@ function clampLimit(raw, fallback, maximum) {
 const STATS_WINDOWS = { "1h": 3600e3, "24h": 86400e3, "7d": 7 * 86400e3 };
 const HOURLY_THRESHOLD_MS = 25 * 3600e3;
 
+// 面板静态文件白名单。只认识这三个路径，所以不存在路径穿越需要防 ——
+// 不写通用静态服务器。文件名相对本模块解析，因此从任何 cwd 启动都能找到。
+const PUBLIC_FILES = new Map([
+  ["/", ["index.html", "text/html; charset=utf-8"]],
+  ["/index.html", ["index.html", "text/html; charset=utf-8"]],
+  ["/dashboard.js", ["dashboard.js", "text/javascript; charset=utf-8"]],
+]);
+
+/** 去掉尾部斜杠。静态白名单与下面的路由表共用同一套归一化规则。 */
+export function normalizePath(pathname) {
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
 function handle({ url, send, store, config, healthSnapshot }) {
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const path = normalizePath(url.pathname);
   const query = url.searchParams;
 
   switch (path) {
@@ -104,6 +118,24 @@ export function createServer({ store, config, healthSnapshot = () => ({}), logge
 
     if (request.method !== "GET") {
       send(405, { error: `只支持 GET，收到 ${request.method}` });
+      return;
+    }
+
+    // 面板静态文件：在 bearer 校验之**前**处理 —— 否则配了令牌的人连页面都拿不到，
+    // 也就没机会把令牌交给页面。页面本身不含任何密钥，数据仍受令牌保护。
+    const asset = PUBLIC_FILES.get(normalizePath(url.pathname));
+    if (asset) {
+      const [file, contentType] = asset;
+      try {
+        // 每次请求都读盘，不做内存缓存：面板一天开不了几次，
+        // 换来的是改完 HTML 刷新即可生效、不用重启服务。
+        const body = readFileSync(new URL(`../public/${file}`, import.meta.url));
+        response.writeHead(200, { ...headers, "Content-Type": contentType });
+        response.end(body);
+      } catch (error) {
+        logger.error(`[server] 读取面板文件失败 ${file}: ${error?.message ?? error}`);
+        send(500, { error: "面板文件不可读" });
+      }
       return;
     }
 

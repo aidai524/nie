@@ -165,8 +165,11 @@ test("未知端点返回 404，非 GET 返回 405", async () => {
 
 test("带尾斜杠的路径也能匹配", async () => {
   const ctx = await withServer();
-  assert.equal((await ctx.get("/health/")).status, 200);
-  assert.equal((await ctx.get("/")).status, 404);
+  assert.equal((await ctx.get("/health/")).status, 200, "数据端点的尾斜杠仍要归一化");
+  // 注意：`/` 在加面板之前是 404，现在是面板本身（200）。这条断言随之更新 ——
+  // 这是本次唯一的既有行为变更，且是刻意的。
+  assert.equal((await ctx.get("/")).status, 200);
+  assert.equal((await ctx.get("/nope/")).status, 404, "未列出的路径（含尾斜杠）仍是 404");
   await ctx.close();
 });
 
@@ -193,3 +196,56 @@ test("没配 bearerToken 时不校验", async () => {
   assert.equal((await ctx.get("/health")).status, 200);
   await ctx.close();
 });
+
+test("GET / 返回面板 HTML", async () => {
+  const ctx = await withServer();
+  const res = await ctx.get("/");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /^text\/html/);
+  assert.ok((await res.text()).includes("NEAR Intents 报价监控"));
+  await ctx.close();
+});
+
+test("GET /index.html 与 GET / 返回同一份，且容忍尾斜杠", async () => {
+  const ctx = await withServer();
+  const root = await (await ctx.get("/")).text();
+  assert.equal(await (await ctx.get("/index.html")).text(), root);
+  assert.equal(await (await ctx.get("/index.html/")).text(), root, "尾斜杠也要归一化");
+  await ctx.close();
+});
+
+test("GET /dashboard.js 以 JS 的 MIME 返回", async () => {
+  const ctx = await withServer();
+  const res = await ctx.get("/dashboard.js");
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /^(text|application)\/javascript/);
+  assert.ok((await res.text()).includes("export function buildRows"));
+  await ctx.close();
+});
+
+test("静态白名单之外的路径仍是 404，且不存在目录穿越", async () => {
+  const ctx = await withServer();
+  for (const path of ["/public/index.html", "/package.json", "/dashboard.js.map", "/../package.json", "/public/"]) {
+    const res = await ctx.get(path);
+    assert.equal(res.status, 404, `${path} 应返回 404，实际 ${res.status}`);
+  }
+  await ctx.close();
+});
+
+test("配了 bearerToken 时静态页面仍可访问，但数据端点仍要令牌", async () => {
+  const ctx = await withServer({ bearerToken: "s3cret" });
+  assert.equal((await ctx.get("/")).status, 200, "否则拿不到页面就没法把令牌交给页面");
+  assert.equal((await ctx.get("/dashboard.js")).status, 200);
+  assert.equal((await ctx.get("/health")).status, 401);
+  assert.equal((await ctx.get("/health", { headers: { Authorization: "Bearer s3cret" } })).status, 200);
+  await ctx.close();
+});
+
+test("静态文件响应也带 CORS 头", async () => {
+  const ctx = await withServer({ cors: "https://panel.example.com" });
+  const res = await ctx.get("/");
+  assert.equal(res.headers.get("access-control-allow-origin"), "https://panel.example.com");
+  assert.equal(res.headers.get("vary"), "Origin");
+  await ctx.close();
+});
+
