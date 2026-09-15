@@ -131,3 +131,50 @@ test("环境变量覆盖不会污染 DEFAULT_CONFIG（模块级状态泄漏回�
     (e) => e instanceof ConfigError && e.issues.some((i) => i.includes("webhookUrl")),
   );
 });
+
+test("depth 段的默认值", () => {
+  const cfg = load(ONE_PAIR);
+  assert.equal(cfg.depth.enabled, true);
+  assert.equal(cfg.depth.intervalSec, 900);
+  assert.deepEqual(cfg.depth.tiers, [100, 1000, 10000, 100000, 1000000]);
+  assert.equal(cfg.depth.concurrency, 3);
+});
+
+test("depth 段可以深合并覆盖单个字段", () => {
+  const cfg = load({ ...ONE_PAIR, depth: { tiers: [500, 5000] } });
+  assert.deepEqual(cfg.depth.tiers, [500, 5000]);
+  assert.equal(cfg.depth.intervalSec, 900, "兄弟字段保留默认值");
+});
+
+test("depth.tiers 必须是非空、严格递增的正整数数组", () => {
+  const bad = (tiers) => () => load({ ...ONE_PAIR, depth: { tiers } });
+  assert.throws(bad([]), (e) => e.issues.some((i) => i.includes("depth.tiers")));
+  assert.throws(bad([1000, 100]), (e) => e.issues.some((i) => i.includes("递增")));
+  assert.throws(bad([100, 100]), (e) => e.issues.some((i) => i.includes("递增")));
+  assert.throws(bad([100, -5]), (e) => e.issues.some((i) => i.includes("正整数")));
+  assert.throws(bad([100, 0]), (e) => e.issues.some((i) => i.includes("正整数")));
+  assert.throws(bad([100, 1000.5]), (e) => e.issues.some((i) => i.includes("正整数")));
+  assert.throws(bad([100, "1k"]), (e) => e.issues.some((i) => i.includes("正整数")));
+});
+
+test("depth.tiers 最多 10 项（防止把对方 API 打爆）", () => {
+  const eleven = Array.from({ length: 11 }, (_, i) => (i + 1) * 100);
+  assert.throws(() => load({ ...ONE_PAIR, depth: { tiers: eleven } }), (e) => e.issues.some((i) => i.includes("10")));
+  const ten = Array.from({ length: 10 }, (_, i) => (i + 1) * 100);
+  assert.equal(load({ ...ONE_PAIR, depth: { tiers: ten } }).depth.tiers.length, 10);
+});
+
+test("depth.intervalSec 不能比哨兵还快", () => {
+  assert.throws(() => load({ ...ONE_PAIR, depth: { intervalSec: 30 } }), (e) => e.issues.some((i) => i.includes("intervalSec")));
+  assert.equal(load({ ...ONE_PAIR, depth: { intervalSec: 60 } }).depth.intervalSec, 60);
+});
+
+test("depth.concurrency 与全局 concurrency 同规则", () => {
+  assert.throws(() => load({ ...ONE_PAIR, depth: { concurrency: 0 } }), (e) => e.issues.some((i) => i.includes("depth.concurrency")));
+  assert.throws(() => load({ ...ONE_PAIR, depth: { concurrency: 51 } }), (e) => e.issues.some((i) => i.includes("depth.concurrency")));
+});
+
+test("depth.enabled 关闭时不校验 tiers（可以留空）", () => {
+  const cfg = load({ ...ONE_PAIR, depth: { enabled: false, tiers: [] } });
+  assert.equal(cfg.depth.enabled, false);
+});

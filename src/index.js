@@ -4,10 +4,11 @@ import { pathToFileURL } from "node:url";
 
 import { ConfigError, loadConfig } from "./config.js";
 import { buildPairs, normalizeTokens } from "./assets.js";
-import { fetchJson } from "./http.js";
+import { fetchJson, mapLimit } from "./http.js";
 import { hourFloorIso, openStore } from "./store.js";
 import { STATUS, evaluate } from "./detect.js";
-import { quoteAll } from "./quote.js";
+import { quoteAll, quotePair } from "./quote.js";
+import { depthAmountMinor, summariseDepth } from "./depth.js";
 import { createNotifier, decideDigestAction, decideEventAction, formatDigest, formatEvent } from "./notify.js";
 import { createServer } from "./server.js";
 
@@ -183,6 +184,70 @@ export async function runRound(ctx) {
   return summary;
 }
 
+/**
+ * 金额阶梯扫描：对每对币按每个名义美元档位各报一次价，写进独立的 depth_quotes 表。
+ *
+ * 与哨兵完全隔离：不碰 quotes、不碰 pair_state、不参与告警判定。
+ * 哨兵的轮次先跑、扫描后跑（同一个 runMaintenance 里按顺序），所以价格总是有的；
+ * 一小时内没有成功报价的币对整对跳过（没有价格就没法把美元折算成 token 数量）。
+ */
+export async function runDepthSweep(ctx) {
+  const { config, pairs, store, fetchImpl } = ctx;
+  const now = ctx.now ?? new Date();
+  const nowIso = now.toISOString();
+  const deadline = new Date(now.getTime() + config.defaults.deadlineMs).toISOString();
+  const sinceIso = new Date(now.getTime() - 3600e3).toISOString();
+
+  const jobs = [];
+  const skipped = [];
+  for (const pair of pairs) {
+    const recent = store.getRecentQuotes(pair.id, sinceIso, 20).find((quote) => quote.ok && quote.amountOutUsd);
+    if (!recent) {
+      skipped.push(pair.id);
+      continue;
+    }
+    for (const tierUsd of config.depth.tiers) {
+      const amountMinor = depthAmountMinor(recent, tierUsd);
+      if (amountMinor === null) continue;
+      jobs.push({ pair, tierUsd, amountMinor });
+    }
+  }
+
+  if (skipped.length > 0) {
+    logger_warnSkip(ctx, skipped);
+  }
+  if (jobs.length === 0) {
+    // 即使一对都做不了，也要记下这次尝试 —— 否则每个哨兵轮次都会重试一遍
+    // （每对一次 getRecentQuotes），而扫描节奏本该由 intervalSec 决定。
+    store.setMeta("last_sweep_ts", nowIso);
+    return { pairs: 0, rows: 0, skipped };
+  }
+
+  const results = await mapLimit(jobs, config.depth.concurrency, ({ pair, tierUsd, amountMinor }) =>
+    quotePair({ ...pair, amountMinor }, { config, deadline, fetchImpl, now }));
+
+  const rows = results.map((result, index) => {
+    const { pair, tierUsd, amountMinor } = jobs[index];
+    const quote = result.ok ? result.value : null;
+    if (!quote) {
+      return {
+        ts: nowIso, pairId: pair.id, tierUsd, ok: false, httpStatus: null, latencyMs: null,
+        amountMinor, errorCode: "internal", errorMessage: `内部错误: ${result.error?.message ?? result.error}`,
+      };
+    }
+    return { ...quote, pairId: pair.id, tierUsd, amountMinor };
+  });
+
+  store.insertDepthQuotes(rows);
+  store.setMeta("last_sweep_ts", nowIso);
+  return { pairs: new Set(rows.map((r) => r.pairId)).size, rows: rows.length, skipped };
+}
+
+/** 跳过明细只打一次（否则每 15 分钟刷一遍同样的名单） */
+function logger_warnSkip(ctx, skipped) {
+  ctx.logger.warn(`深度扫描跳过 ${skipped.length} 对（一小时内没有成功报价，无法折算金额）：${skipped.join(", ")}`);
+}
+
 export async function runMaintenance(ctx) {
   const { config, store, notifier, logger } = ctx;
   const now = ctx.now ?? new Date();
@@ -206,13 +271,31 @@ export async function runMaintenance(ctx) {
       const deleted = store.pruneHourly(cutoff);
       if (deleted > 0) logger.info(`清理 ${deleted} 个超过 ${config.retention.hourlyDays} 天的小时桶`);
     }
+    if (config.retention.rawDays > 0) {
+      const cutoff = new Date(now.getTime() - config.retention.rawDays * 86400e3).toISOString();
+      const prunedDepth = store.pruneDepth(cutoff);
+      if (prunedDepth > 0) logger.info(`清理 ${prunedDepth} 条超过 ${config.retention.rawDays} 天的深度数据`);
+    }
+  }
+
+  // 深度扫描：低频、阻塞。190 次请求 ÷ 并发 3 约 1–2 分钟，所以每 15 轮里有 1 轮哨兵会被推迟
+  // ——主循环会打出「上一轮耗时超过 intervalSec，立即开始下一轮」。这是已确认接受的代价。
+  if (config.depth.enabled) {
+    const lastSweepTs = store.getMeta("last_sweep_ts", null);
+    const dueAt = lastSweepTs === null ? 0 : Date.parse(lastSweepTs) + config.depth.intervalSec * 1000;
+    if (now.getTime() >= dueAt) {
+      const result = await runDepthSweep({ ...ctx, now });
+      logger.info(`深度扫描完成: ${result.pairs} 对 × ${config.depth.tiers.length} 档 = ${result.rows} 行`
+        + (result.skipped.length > 0 ? `，跳过 ${result.skipped.length} 对` : ""));
+    }
   }
 
   await maybeSendDigest(ctx, nowIso);
 }
 
 async function maybeSendDigest(ctx, nowIso) {
-  const { config, store, notifier } = ctx;
+  const { config, store, notifier, pairs } = ctx;
+  const sweep = store.getLatestSweep();
   const lastDigestTs = store.getMeta("last_digest_ts", null);
   const shouldSend = decideDigestAction({
     lastDigestTs,
@@ -235,6 +318,9 @@ async function maybeSendDigest(ctx, nowIso) {
   const p95s = stats.pairs.map((entry) => entry.latency?.p95).filter((value) => typeof value === "number");
 
   const text = formatDigest({
+    depth: config.depth.enabled && sweep.ts !== null
+      ? summariseDepth({ rows: sweep.rows, pairCount: pairs.length, tiers: config.depth.tiers })
+      : null,
     windowHours: 24,
     pairCount: stats.pairs.length,
     totalRounds,

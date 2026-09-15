@@ -151,3 +151,26 @@ test("notifier 把发送失败返回成 ok:false 而不抛错", async () => {
   assert.ok(result.error.includes("fetch failed"));
   assert.equal(errors.length, 1);
 });
+
+test("日汇总在有深度快照时多出一行", () => {
+  const text = formatDigest({
+    windowHours: 24, pairCount: 38, totalRounds: 100, okRounds: 95, okRate: 0.95,
+    worst: [], latencyP95: 2000,
+    depth: {
+      pairCount: 38, byTier: [{ tierUsd: 1000000, passing: 12 }, { tierUsd: 100000, passing: 29 }],
+      deadPairs: 3, sweptPairs: 33, unsweptPairs: 5,
+    },
+  });
+  assert.ok(text.includes("深度"), "要有深度这一行");
+  assert.ok(text.includes("1M"), "档位要用人读形式");
+  assert.ok(text.includes("12/33"), "分母必须是实际扫到的 33 对，不是白名单的 38");
+  assert.ok(text.includes("100k"));
+  assert.ok(text.includes("29/33"));
+  assert.ok(text.includes("3 对全档不通"));
+  assert.ok(text.includes("5 对无可用价格未扫描"), "没被扫到的对必须说出来，否则会被误读成故障");
+});
+
+test("日汇总在没有深度数据时不加那一行（行为与加这个功能之前完全一致）", () => {
+  const text = formatDigest({ windowHours: 24, pairCount: 38, totalRounds: 100, okRounds: 95, okRate: 0.95, worst: [], latencyP95: 2000 });
+  assert.ok(!text.includes("深度"));
+});

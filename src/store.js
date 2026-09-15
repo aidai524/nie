@@ -74,6 +74,28 @@ CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS depth_quotes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  pair_id TEXT NOT NULL,
+  tier_usd INTEGER NOT NULL,
+  ok INTEGER NOT NULL,
+  http_status INTEGER,
+  latency_ms INTEGER,
+  amount_minor TEXT,
+  amount_in TEXT,
+  amount_out TEXT,
+  amount_in_usd TEXT,
+  amount_out_usd TEXT,
+  min_amount_out TEXT,
+  time_estimate INTEGER,
+  correlation_id TEXT,
+  error_code TEXT,
+  error_message TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_depth_pair_ts ON depth_quotes(pair_id, ts);
+CREATE INDEX IF NOT EXISTS idx_depth_ts ON depth_quotes(ts);
 `;
 
 const toBool = (value) => value === 1;
@@ -91,6 +113,28 @@ function toQuote(row) {
     amountInUsd: row.amount_in_usd,
     amountOutUsd: row.amount_out_usd,
     minAmountIn: row.min_amount_in,
+    minAmountOut: row.min_amount_out,
+    timeEstimate: row.time_estimate,
+    correlationId: row.correlation_id,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+  };
+}
+
+function toDepthQuote(row) {
+  return {
+    id: row.id,
+    ts: row.ts,
+    pairId: row.pair_id,
+    tierUsd: row.tier_usd,
+    ok: toBool(row.ok),
+    httpStatus: row.http_status,
+    latencyMs: row.latency_ms,
+    amountMinor: row.amount_minor,
+    amountIn: row.amount_in,
+    amountOut: row.amount_out,
+    amountInUsd: row.amount_in_usd,
+    amountOutUsd: row.amount_out_usd,
     minAmountOut: row.min_amount_out,
     timeEstimate: row.time_estimate,
     correlationId: row.correlation_id,
@@ -395,6 +439,47 @@ export class Store {
       });
     }
     return { resolution, pairs };
+  }
+
+/** 深度扫描的一批行。与 insertQuotes 同语义：整批单事务，任一行失败全部回滚。 */
+  insertDepthQuotes(rows) {
+    if (rows.length === 0) return 0;
+    const statement = this.db.prepare(`
+      INSERT INTO depth_quotes (ts, pair_id, tier_usd, ok, http_status, latency_ms, amount_minor,
+                                amount_in, amount_out, amount_in_usd, amount_out_usd, min_amount_out,
+                                time_estimate, correlation_id, error_code, error_message)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    this.db.exec("BEGIN");
+    try {
+      for (const item of rows) {
+        statement.run(
+          item.ts, item.pairId, item.tierUsd, item.ok ? 1 : 0,
+          item.httpStatus ?? null, item.latencyMs ?? null, item.amountMinor ?? null,
+          item.amountIn ?? null, item.amountOut ?? null,
+          item.amountInUsd ?? null, item.amountOutUsd ?? null, item.minAmountOut ?? null,
+          item.timeEstimate ?? null, item.correlationId ?? null,
+          item.errorCode ?? null, item.errorMessage == null ? null : String(item.errorMessage).slice(0, 500),
+        );
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return rows.length;
+  }
+
+  /** 最近一次扫描的全部行。空表返回 { ts: null, rows: [] } —— 用 ts 精确圈定，不混入更早的扫描。 */
+  getLatestSweep() {
+    const latest = this.db.prepare("SELECT MAX(ts) AS ts FROM depth_quotes").get();
+    if (latest === undefined || latest.ts === null || latest.ts === undefined) return { ts: null, rows: [] };
+    const rows = this.db.prepare("SELECT * FROM depth_quotes WHERE ts = ? ORDER BY pair_id, tier_usd")
+      .all(latest.ts).map(toDepthQuote);
+    return { ts: latest.ts, rows };
+  }
+
+  pruneDepth(beforeIso) {
+    return Number(this.db.prepare("DELETE FROM depth_quotes WHERE ts < ?").run(beforeIso).changes);
   }
 
   getMeta(key, fallback) {
