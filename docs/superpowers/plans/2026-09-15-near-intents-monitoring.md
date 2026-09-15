@@ -4539,6 +4539,13 @@ Expected，逐条对照：
 3. 如果出现 `recipient is not valid`，说明那条链的哑地址没通过校验。把 `config.json` 里对应 `addresses.<chain>` 换成你自己控制的一个合法地址后重跑。已知 near / 全部 EVM 链 / sol 的默认值已验证通过；tron 与 zec 的默认值未验证。
 4. 如果出现 `limits` 错误码，说明该链的最低额限制高于 1500，给那条币对在 `config.json` 里加 `"amount": "<更大的值>"`。
 
+**验收实测结果（2026-09-15，本计划执行时）**：38 对全部解析成功，`ok=33 / error=5 / deviant=0`，共 1 轮约 14s。
+失败清单为 `near:USDC>tron:USDT`、`tron:USDT>near:USDC`、`bsc:USDT>tron:USDT`、`tron:USDT>bsc:USDT`（均 `Internal server error`）
+与 `near:USDC>xlayer:USDC`（`No liquidity available`）。
+
+**上面第 2 条的预期已被真实网络推翻**：`→bsc:USDC` 在这次验收时已经恢复（最低额错误消失），而 `→xlayer:USDC` 新出现无流动性。
+两者相差只有几个小时 —— 这恰好说明本服务要报的就是这种对手方状态，而不是配置问题。不要把这些红对当成 bug 去“修”。
+
 - [ ] **Step 6: 验收 API**
 
 ```bash
