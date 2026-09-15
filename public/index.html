@@ -6,164 +6,469 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NEAR Intents 报价监控</title>
   <style>
+    /* ==========================================================================
+       设计令牌 —— 全部取自 design/clickhouse/DESIGN.md，未改动任何色值。
+       token 名与该规范的 YAML 键一一对应，便于逐条回溯核对。
+       ========================================================================== */
     :root {
-      --bg: #0f1115;
-      --panel: #171a21;
-      --line: #2a3040;
-      --text: #e8ecf4;
-      --muted: #8b93a7;
-      --accent: #6ea8ff;
-      --ok: #3dd68c;
-      --warn: #f5c451;
-      --err: #ff6b7a;
-      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      /* colors —— 品牌与强调 */
+      --color-primary: #faff69;
+      --color-primary-active: #e6eb52;
+      --color-primary-disabled: #3a3a1f;
+      /* colors —— 表面（规范里就是暗色主画布，没有浅色模式） */
+      --color-canvas: #0a0a0a;
+      --color-surface-soft: #121212;
+      --color-surface-card: #1a1a1a;
+      --color-surface-elevated: #242424;
+      --color-hairline: #2a2a2a;
+      --color-hairline-strong: #3a3a3a;
+      /* colors —— 文字 */
+      --color-on-dark: #ffffff;
+      --color-body: #cccccc;
+      --color-body-strong: #e6e6e6;
+      --color-muted: #888888;
+      --color-muted-soft: #5a5a5a;
+      --color-on-primary: #0a0a0a;
+      /* colors —— 语义。规范把这三个明确留给「产品 UI 的状态指示」，
+         所以表格里的绿/黄/红是规范内的用法，不是我自己加的第二个品牌色。 */
+      --color-success: #22c55e;
+      --color-warning: #f59e0b;
+      --color-error: #ef4444;
+
+      /* typography —— Inter 是规范指定的字体；它同时给出了回退栈
+         （-apple-system / BlinkMacSystemFont / Segoe UI / Roboto）。本项目零依赖、
+         不外链任何资源，所以不加载 webfont，直接用规范自己的回退栈。 */
+      --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+      --type-title-lg-size: 24px;
+      --type-title-lg-weight: 700;
+      --type-title-lg-tracking: -0.3px;
+      --type-stat-display-size: 56px;
+      --type-stat-display-weight: 700;
+      --type-stat-display-tracking: -1.5px;
+      --type-title-md-size: 18px;
+      --type-title-md-weight: 600;
+      --type-body-md-size: 16px;
+      --type-body-md-weight: 400;
+      --type-body-sm-size: 14px;
+      --type-body-sm-weight: 400;
+      --type-caption-size: 13px;
+      --type-caption-weight: 500;
+      --type-caption-uppercase-size: 12px;
+      --type-caption-uppercase-weight: 600;
+      --type-caption-uppercase-tracking: 1.5px;
+      --type-code-size: 14px;
+      --type-code-weight: 400;
+      --type-button-size: 14px;
+      --type-button-weight: 600;
+      --type-nav-link-size: 14px;
+      --type-nav-link-weight: 500;
+
+      /* spacing —— 4px 基准 */
+      --spacing-xxs: 4px;
+      --spacing-xs: 8px;
+      --spacing-sm: 12px;
+      --spacing-md: 16px;
+      --spacing-lg: 24px;
+      --spacing-xl: 32px;
+      --spacing-xxl: 48px;
+
+      /* rounded —— 分级：按钮 8px、内容卡 12px、药丸只给小徽章 */
+      --rounded-xs: 4px;
+      --rounded-sm: 6px;
+      --rounded-md: 8px;
+      --rounded-lg: 12px;
+      --rounded-pill: 9999px;
     }
+
+    /* ==========================================================================
+       以下为「规范未覆盖、由我推导」的部分（规范的 Known Gaps 自己承认：
+       实际产品界面——查询控制台、监控面板、表格浏览器——超出它的范围）。
+       我一律只用上面的令牌来推导，不引入规范之外的颜色或字体：
+
+         · 应用外壳：顶栏底部分隔线（规范只规定 top-nav 背景=canvas，没说怎么分隔）
+         · 数据表：行高、粘性表头、行分隔线、可点行的 hover、状态小徽章
+         · 展开详情：嵌在大卡内的小卡（规范有 surface-elevated 用于「嵌套卡内的小卡」）
+         · 提示条：错误/警告横幅
+         · 过滤条：把规范里的 category-tab 用在「全部 / 仅异常」上
+
+       规范里没有 hover，且明确写着「不要加规范未编码的 hover 样式」与
+       「Never document hover」。但这一页的表格行是可点击展开的、必须有可点提示，
+       所以只在「可点行」上用了 surface-elevated 作为按下态。这是推导，不是规范。
+       ========================================================================== */
 
     * { box-sizing: border-box; }
 
+    /* 规范：全局以 near-pure black 画布为底，文字用 on-dark。 */
     body {
       margin: 0;
-      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      background: var(--color-canvas);
+      color: var(--color-body);
+      font-family: var(--font-sans);
+      font-size: var(--type-body-md-size);
+      font-weight: var(--type-body-md-weight);
+      line-height: 1.55;
     }
 
-    main { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    /* 规范：Max content width ~1280px centered */
+    main { max-width: 1280px; margin: 0 auto; padding: 0 var(--spacing-lg) var(--spacing-xxl); }
 
-    h1 { font-size: 18px; margin: 0; font-weight: 650; }
+    /* ---------- 顶栏（component: top-nav，64px，canvas 背景） ---------- */
+    .top-nav {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-md);
+      min-height: 64px;
+      border-bottom: 1px solid var(--color-hairline);   /* 推导：应用外壳需要分隔 */
+    }
 
-    .title-row { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
-
-    #counts { color: var(--muted); font-variant-numeric: tabular-nums; }
-
-    .status-row {
-      display: flex; align-items: center; gap: 12px;
-      margin-top: 10px; color: var(--muted); font-size: 13px;
+    .top-nav h1 {
+      margin: 0;
+      color: var(--color-on-dark);
+      font-size: var(--type-title-lg-size);
+      font-weight: var(--type-title-lg-weight);
+      letter-spacing: var(--type-title-lg-tracking);
     }
 
     .spacer { flex: 1; }
 
-    .hint { color: var(--muted); font-size: 12px; }
+    /* ---------- 统计数字（component: stat-callout + typography: stat-display） ----------
+       规范原文：stat 数字「ALWAYS yellow」，是这一套里负责「可信度时刻」的元素。
+       我们这一页可信度时刻就是那三个计数，所以它们是整页唯一的黄色文字。 */
+    .stats {
+      display: flex;
+      gap: var(--spacing-xl);
+      flex-wrap: wrap;
+      padding: var(--spacing-lg) 0;
+    }
 
-    .warn { color: var(--warn); }
+    .stat { display: flex; flex-direction: column; gap: var(--spacing-xxs); }
 
+    .stat-value {
+      color: var(--color-primary);
+      font-size: var(--type-stat-display-size);
+      font-weight: var(--type-stat-display-weight);
+      line-height: 1;
+      letter-spacing: var(--type-stat-display-tracking);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 规范：caption-uppercase（12 / 600 / 1.5px）用于 section label */
+    .stat-label {
+      color: var(--color-muted);
+      font-size: var(--type-caption-uppercase-size);
+      font-weight: var(--type-caption-uppercase-weight);
+      letter-spacing: var(--type-caption-uppercase-tracking);
+      text-transform: uppercase;
+    }
+
+    /* ---------- 状态行（新鲜度 / 阈值说明 / 主按钮） ---------- */
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-md);
+      flex-wrap: wrap;
+      padding-bottom: var(--spacing-lg);
+      color: var(--color-muted);
+      font-size: var(--type-caption-size);
+      font-weight: var(--type-caption-weight);
+    }
+
+    .status-row .warn { color: var(--color-warning); }
+
+    .hint { color: var(--color-muted-soft); font-size: var(--type-caption-size); }
+
+    /* ---------- 按钮（component: button-primary / button-secondary） ----------
+       规范：主按钮黄底黑字、8px 圆角、40px 高、14/600；黄色只给主操作。 */
     button {
-      font: inherit; color: var(--text); background: #10131a;
-      border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+      height: 40px;
+      padding: 0 var(--spacing-md);
+      font-family: var(--font-sans);
+      font-size: var(--type-button-size);
+      font-weight: var(--type-button-weight);
+      border: 0;
+      border-radius: var(--rounded-md);
+      cursor: pointer;
     }
 
-    button:hover { border-color: var(--accent); }
+    button.primary {
+      background: var(--color-primary);
+      color: var(--color-on-primary);
+    }
 
+    button.primary:hover { background: var(--color-primary-active); }
+    button.primary:disabled { background: var(--color-primary-disabled); color: var(--color-muted); cursor: not-allowed; }
+
+    button.secondary {
+      background: var(--color-surface-card);
+      color: var(--color-on-dark);
+    }
+
+    /* ---------- 令牌输入（component: text-input，surface-card 底 + 8px 圆角 + 40px 高） ---------- */
     .token-box {
-      margin-top: 10px; padding: 10px; border: 1px solid var(--warn);
-      border-radius: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      flex-wrap: wrap;
+      margin-bottom: var(--spacing-lg);
+      padding: var(--spacing-md);
+      background: var(--color-surface-card);
+      border: 1px solid var(--color-hairline-strong);
+      border-radius: var(--rounded-lg);
+      color: var(--color-body);
+      font-size: var(--type-body-sm-size);
     }
 
-    .token-box input { font: inherit; color: var(--text); background: #10131a; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+    .token-box input {
+      height: 40px;
+      padding: 0 var(--spacing-sm);
+      background: var(--color-surface-elevated);
+      color: var(--color-on-dark);
+      font-family: var(--font-sans);
+      font-size: var(--type-body-sm-size);
+      border: 1px solid var(--color-hairline);
+      border-radius: var(--rounded-md);
+    }
 
+    .token-box input:focus { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+    /* ---------- 过滤条（component: category-tab / category-tab-active） ---------- */
     .filters {
-      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
-      margin: 16px 0 10px; color: var(--muted); font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      flex-wrap: wrap;
+      padding-bottom: var(--spacing-md);
+      color: var(--color-muted);
+      font-size: var(--type-caption-size);
+      font-weight: var(--type-caption-weight);
     }
 
-    .filters input[type="search"] { font: inherit; color: var(--text); background: #10131a; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
-    .filters select { font: inherit; color: var(--text); background: #10131a; border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+    /* 「仅异常」用 category-tab 的形态：未选中透明+弱化字，选中给 surface-card 底 */
+    .filters .check {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-xs);
+      padding: 8px 14px;
+      background: transparent;
+      color: var(--color-muted);
+      border-radius: var(--rounded-md);
+      cursor: pointer;
+    }
 
-    .banner { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); }
-    .banner.err { border-color: var(--err); color: var(--err); }
-    .banner.warn { border-color: var(--warn); color: var(--warn); }
+    .filters .check:has(input:checked) {
+      background: var(--color-surface-card);
+      color: var(--color-on-dark);
+    }
 
-    table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    .filters input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: var(--color-primary); }
+    .filters label { display: flex; align-items: center; gap: var(--spacing-xs); }
 
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .filters select,
+    .filters input[type="search"] {
+      height: 40px;
+      padding: 0 var(--spacing-sm);
+      background: var(--color-surface-card);
+      color: var(--color-on-dark);
+      font-family: var(--font-sans);
+      font-size: var(--type-body-sm-size);
+      border: 1px solid var(--color-hairline);
+      border-radius: var(--rounded-md);
+    }
 
-    th { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+    .filters select:focus,
+    .filters input[type="search"]:focus { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+
+    /* ---------- 提示条（推导）：服务不可达 / 陈旧 / 需要令牌 ---------- */
+    .banner {
+      margin: 0 0 var(--spacing-md);
+      padding: var(--spacing-sm) var(--spacing-md);
+      background: var(--color-surface-card);
+      border: 1px solid var(--color-hairline-strong);
+      border-radius: var(--rounded-lg);
+      font-size: var(--type-body-sm-size);
+    }
+
+    .banner.err { border-color: var(--color-error); color: var(--color-error); }
+    .banner.warn { border-color: var(--color-warning); color: var(--color-warning); }
+
+    /* ---------- 数据表（推导：规范未覆盖表格） ----------
+       规范：内容卡用 surface-card + 12px 圆角 + 1px hairline，且「不用阴影」。 */
+    .table-card {
+      background: var(--color-surface-card);
+      border: 1px solid var(--color-hairline);
+      border-radius: var(--rounded-lg);
+      overflow: hidden;                 /* 让圆角裁掉表头的直角 */
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: var(--spacing-sm) var(--spacing-sm);
+      background: var(--color-surface-card);
+      color: var(--color-muted);
+      font-size: var(--type-caption-uppercase-size);
+      font-weight: var(--type-caption-uppercase-weight);
+      letter-spacing: var(--type-caption-uppercase-tracking);
+      text-transform: uppercase;
+      text-align: left;
+      white-space: nowrap;
+      border-bottom: 1px solid var(--color-hairline-strong);
+    }
+
+    tbody td {
+      padding: var(--spacing-xs) var(--spacing-sm);
+      border-bottom: 1px solid var(--color-hairline);
+      vertical-align: middle;
+    }
 
     tbody tr:last-child td { border-bottom: 0; }
 
+    /* 规范：数字与代码用 typography.code（JetBrains Mono 14/400） */
+    td.pair, td.amount, td.cost, td.depth, td.usd, td.dev, td.latency, td.time {
+      font-family: var(--font-mono);
+      font-size: var(--type-code-size);
+      font-weight: var(--type-code-weight);
+      color: var(--color-body-strong);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    td.pair { color: var(--color-on-dark); }
+    td.usd, td.time { color: var(--color-muted); }
+    td.dev.muted { color: var(--color-muted-soft); }
+    td.latency.warn { color: var(--color-warning); }
+    td.note { font-size: var(--type-caption-size); color: var(--color-muted); }
+    td.note.err { color: var(--color-error); }
+    td.note.warn { color: var(--color-warning); }
+
+    /* 可点行：规范未定义 hover，这里只用 surface-elevated（规范里的「嵌套/按下」层） */
     tr.row.clickable { cursor: pointer; }
-    tr.row:hover { background: #1c2029; }
+    tr.row.clickable:hover { background: var(--color-surface-elevated); }
 
-    td.pair, td.amount, td.cost, td.usd, td.latency, td.time { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
-    td.usd { color: var(--muted); }
-    td.note { color: var(--muted); font-size: 12px; }
-    td.note.err { color: var(--err); }
-    td.note.warn { color: var(--warn); }
-    td.dev { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
-    td.dev.muted { color: var(--muted); }
+    /* 状态小徽章（component: badge-pill；规范允许小徽章用 pill 圆角，
+       并把 green/amber/red 明确留给产品 UI 的状态指示） */
+    td.status span {
+      display: inline-block;
+      padding: 2px 9px;                      /* 含 1px 边框后总尺寸与其它单元格对齐 */
+      border: 1px solid var(--color-hairline-strong);
+      border-radius: var(--rounded-pill);
+      background: transparent;
+      color: var(--color-muted);
+      font-size: var(--type-caption-size);
+      font-weight: 600;
+      white-space: nowrap;
+    }
 
-    td.status { font-weight: 650; white-space: nowrap; }
-    tr.row.ok td.status { color: var(--ok); }
-    tr.row.deviant td.status { color: var(--warn); }
-    tr.row.error td.status { color: var(--err); }
-    tr.row.unknown td.status { color: var(--muted); }
+    /* 规范：深度只用「1px 边框」表达，不用投影。颜色取自规范留给产品 UI 状态的那三个语义色 */
+    tr.row.ok td.status span { color: var(--color-success); border-color: var(--color-success); }
+    tr.row.deviant td.status span { color: var(--color-warning); border-color: var(--color-warning); }
+    tr.row.error td.status span { color: var(--color-error); border-color: var(--color-error); }
 
-    tr.detail td { background: #10131a; font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-all; }
-    tr.detail span.kv { display: inline-block; margin-right: 16px; }
-    tr.detail span.kv b { color: var(--text); font-weight: 600; }
+    /* ---------- 展开详情（推导）：规范说 surface-elevated 是「大卡内嵌套的小卡」 ---------- */
+    tr.detail td {
+      padding: var(--spacing-sm) var(--spacing-md);
+      background: var(--color-surface-elevated);
+      color: var(--color-muted);
+      font-family: var(--font-mono);
+      font-size: var(--type-caption-size);
+      word-break: break-all;
+    }
 
-    .empty { color: var(--muted); padding: 16px 0; }
+    tr.detail span.kv { display: inline-block; margin-right: var(--spacing-md); }
+    tr.detail span.kv b { color: var(--color-on-dark); font-weight: 600; }
 
-.no-depth .depth-col { display: none; }
-    tr.detail ol.depth-curve { margin: 6px 0 0; padding-left: 20px; }
+    tr.detail ol.depth-curve { margin: var(--spacing-xs) 0 0; padding-left: 20px; }
     tr.detail ol.depth-curve li { margin: 2px 0; }
-    tr.detail ol.depth-curve li.ok { color: var(--ok); }
-    tr.detail ol.depth-curve li.bad { color: var(--err); }
+    tr.detail ol.depth-curve li.ok { color: var(--color-success); }
+    tr.detail ol.depth-curve li.bad { color: var(--color-error); }
 
-    @media (max-width: 900px) {
-      /* 用类名而不是 nth-child：列的位置会变，下标不会自己跟着变 */
+    /* 「可按」整列隐藏（depth.enabled 为 false 时）。规范：整列消失，而不是显示一列破折号 */
+    .no-depth .depth-col { display: none; }
+
+    .empty {
+      padding: var(--spacing-lg) 0;
+      color: var(--color-muted);
+      font-size: var(--type-body-sm-size);
+    }
+
+    /* ---------- 响应式（规范：Mobile <768 / Tablet 768–1024 / Desktop 1024+） ---------- */
+    @media (max-width: 1024px) {
       .hide-narrow { display: none; }
       td.note { max-width: 220px; }
+    }
+
+    @media (max-width: 768px) {
+      main { padding: 0 var(--spacing-md) var(--spacing-xl); }
+      .stat-value { font-size: 40px; }                 /* 规范：移动端 h1 72→36，同比例下调 */
+      .stats { gap: var(--spacing-lg); }
+      /* 规范：窄屏时卡片内部横向滚动，而不是让字号缩到看不懂 */
+      .table-card { overflow-x: auto; }
+      table { min-width: 720px; }
     }
   </style>
 </head>
 
 <body>
   <main>
-    <header id="topbar">
-      <div class="title-row">
-        <h1>NEAR Intents 报价监控</h1>
-        <span id="counts"></span>
-      </div>
-      <div class="status-row">
-        <span id="freshness">正在加载…</span>
-        <span class="spacer"></span>
-        <span class="hint">阈值 10%（服务端配置）</span>
-        <button type="button" id="refresh">手动刷新</button>
-      </div>
-      <div class="token-box" id="token-box" hidden>
-        <span>服务配了访问令牌，请填入：</span>
-        <input id="token-input" type="password" placeholder="Bearer token" autocomplete="off" />
-        <button type="button" id="token-save">保存并重试</button>
-      </div>
+    <!-- 规范：top-nav，64px，canvas 底，左标题右操作 -->
+    <header class="top-nav" id="topbar">
+      <h1>NEAR Intents 报价监控</h1>
+      <span class="spacer"></span>
+      <span id="freshness" class="hint">正在加载…</span>
+      <button type="button" class="primary" id="refresh">手动刷新</button>
     </header>
 
+    <!-- 规范：stat-callout —— 黄色大数字是这一页唯一的黄色文字 -->
+    <section class="stats" id="stats">
+      <div class="stat"><span class="stat-value" id="count-ok">—</span><span class="stat-label">正常</span></div>
+      <div class="stat"><span class="stat-value" id="count-deviant">—</span><span class="stat-label">偏离</span></div>
+      <div class="stat"><span class="stat-value" id="count-error">—</span><span class="stat-label">失败</span></div>
+    </section>
+
+    <div class="status-row">
+      <span>阈值 10%（服务端配置）</span>
+      <span class="hint" id="shown-count"></span>
+    </div>
+
+    <div class="token-box" id="token-box" hidden>
+      <span>服务配了访问令牌，请填入：</span>
+      <input id="token-input" type="password" placeholder="Bearer token" autocomplete="off" />
+      <button type="button" class="secondary" id="token-save">保存并重试</button>
+    </div>
+
+    <!-- 规范：category-tab 形态用于「全部 / 仅异常」 -->
     <div class="filters" id="filters">
-      <label><input type="checkbox" id="only-problems" /> 仅异常</label>
+      <label class="check"><input type="checkbox" id="only-problems" /> 仅异常</label>
       <label>链 <select id="chain-select"><option value="">全部</option></select></label>
       <label>搜索 <input id="search" type="search" placeholder="币对…" autocomplete="off" /></label>
-      <span id="shown-count" class="hint"></span>
     </div>
 
     <div class="banner" id="banner" hidden></div>
 
-    <table id="table">
-      <thead>
-        <tr>
-          <th>币对</th>
-          <th>状态</th>
-          <th>付 → 得</th>
-          <th title="按美元计价：(付出 − 收到) / 付出。含对方手续费与桥接费，与两个 token 的小数位无关">成本</th>
-          <th class="hide-narrow">USD</th>
-<th class="depth-col" title="这一对能通过的最大档位（名义美元）；点开行看完整曲线">可按</th>
-          <th title="当前报价相对近 1 小时成功报价中位数的变化。与告警判定用的是同一个数">较基准</th>
-          <th class="hide-narrow">延迟</th>
-          <th>最后报价</th>
-          <th>备注</th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
-    </table>
+    <div class="table-card">
+      <table id="table">
+        <thead>
+          <tr>
+            <th>币对</th>
+            <th>状态</th>
+            <th>付 → 得</th>
+            <th title="按美元计价：(付出 − 收到) / 付出。含对方手续费与桥接费，与两个 token 的小数位无关">成本</th>
+            <th class="depth-col" title="这一对能通过的最大档位（名义美元）；点开行看完整曲线">可按</th>
+            <th class="hide-narrow">USD</th>
+            <th title="当前报价相对近 1 小时成功报价中位数的变化。与告警判定用的是同一个数">较基准</th>
+            <th class="hide-narrow">延迟</th>
+            <th>最后报价</th>
+            <th>备注</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
 
     <p class="empty" id="empty" hidden></p>
   </main>

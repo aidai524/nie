@@ -141,6 +141,10 @@ docker run -d --name nearintents-monitor \
 服务起来后，浏览器打开 `http://<host>:8787/` 即是面板 —— 与 API 同源，不需要额外部署任何东西。
 （`npm start` 默认监听 `127.0.0.1:8787`；绑到别的地址就换成对应的主机名。）
 
+面板的视觉语言遵循 `design/clickhouse/DESIGN.md`（取自 awesome-design-md 的 ClickHouse 设计系统分析，
+纯 Markdown、无依赖）。要改样式就读那份规范 —— 它规定了调色板、字階、圆角分级、深度只靠 1px 边框、
+以及「黄色只用于主操作与统计数字」这类护栏。项目约定写在 `AGENTS.md`。
+
 服务只对外暴露三个静态路径：`/`、`/index.html`、`/dashboard.js`。**其余路径仍一律 404** ——
 不是通用静态服务器，所以也不存在目录穿越的问题。这三个路径**不校验访问令牌**（见下），
 因为它们本身不含任何密钥。

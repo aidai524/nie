@@ -356,7 +356,9 @@ const TOKEN_STORAGE_KEY = "nearintents.token";
 
 export function init() {
   const el = {
-    counts: document.getElementById("counts"),
+    countOk: document.getElementById("count-ok"),
+    countDeviant: document.getElementById("count-deviant"),
+    countError: document.getElementById("count-error"),
     freshness: document.getElementById("freshness"),
     banner: document.getElementById("banner"),
     tbody: document.getElementById("tbody"),
@@ -517,7 +519,7 @@ if (row.depthCurve.length > 0) {
       depth: cell(row.depthText, "depth depth-col"),
       usd: cell(row.usdText, "usd hide-narrow"),
       deviation: cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
-      latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn" : "latency hide-narrow"),
+      latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn hide-narrow" : "latency hide-narrow"),
       time: cell(row.lastQuoteText, "time"),
       note: cell(row.note, `note ${row.noteClass}`.trim()),
     };
@@ -572,7 +574,9 @@ if (row.depthCurve.length > 0) {
       el.tokenBox.hidden = true;
       setBanner("", null);
       const counts = summarise(state.rows);
-      el.counts.textContent = `${counts.ok} 正常 · ${counts.deviant} 偏离 · ${counts.error} 失败`;
+      el.countOk.textContent = counts.ok;
+      el.countDeviant.textContent = counts.deviant;
+      el.countError.textContent = counts.error;
       renderRows();
     } catch (error) {
       state.failures += 1;
