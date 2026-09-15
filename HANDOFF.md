@@ -238,6 +238,7 @@ arb:USDC>near:USDC   100 → 0.11%   1k → 0.11%   10k → 0.11%   100k → 0.1
 | `docs/superpowers/specs/2026-09-15-quote-depth-design.md` | 深度扫描设计（含 L 形曲线实测依据、BigInt 折算、不报警的取舍） |
 | `docs/ui-requirements.md` | **面板 UI 的需求清单**（带编号与验证方式）。§4 是两份真实事故换来的「不许说什么」，§12 是明确未满足的需求 |
 | `AGENTS.md` | **项目约定**：设计系统护栏、文案规则（含「面板不能骗人」）、改动的验证要求、零依赖约束 |
-| `design/clickhouse/DESIGN.md` | 面板遵循的设计系统规范（纯 Markdown）。**改任何界面之前先读它**；规范未覆盖的部分在 `public/index.html` 的 CSS 顶部逐项标为「推导」 |
+| `public/index.html` 的 `<style>` | **面板视觉语言的唯一事实来源** —— 零依赖移植自一份 v0 参考 UI（原文件 `ui/app/globals.css`）。移植说明、最小对比度修正、以及哪些规则是项目推导的，都写在 CSS 顶部的注释里 |
+| `design/clickhouse/` | 上一版设计系统（ClickHouse），**已弃用、仅存档** |
 | `docs/superpowers/plans/*.md` | 三份实现计划，每个 Task 带完整代码与验证步骤。**想知道某处代码为什么长这样，先查这里** |
 | `near-intents.html` | 最早的参考实现（浏览器里手填参数打一次报价）。它记录了接口的原始形态，也是那个「用源 token decimals」bug 的出处 |

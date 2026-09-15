@@ -2,31 +2,28 @@
 
 ## 设计系统（改任何界面之前先读）
 
-本项目的界面遵循 **`design/clickhouse/DESIGN.md`** —— 取自 [VoltAgent/awesome-design-md](https://github.com/VoltAgent/awesome-design-md)
-的 ClickHouse 设计语言分析（一份纯 Markdown 规范，无依赖、无构建步骤）。
+面板的视觉语言取自一份 **v0 生成的参考 UI**（原文件 `ui/app/globals.css` + `ui/app/page.tsx`），
+**已零依赖移植进 `public/index.html`**。移植做法与必须守住的东西：
 
-**改 `public/` 下任何东西之前，先读那份规范**，并遵守它的护栏：
+- 去掉了 3 行 Tailwind `@import` 与 `@theme` 块；其余 **44 个自定义类名与 13 个 CSS 变量原样保留**。
+  **不要引入 Tailwind 或任何构建步骤** —— 这份样式表本身不依赖它们（无工具类、无 `@apply`）。
+- **现在唯一的事实来源是 `public/index.html` 的 `<style>`**。要改样式就在那里改。
+  `design/clickhouse/` 是上一版设计系统，**已弃用，仅存档**。
+- 主题是**浅色**（`--background:#f4f5f0`，`color-scheme:light`）。
+- 令牌在 `:root` 定义；规则内仍有若干字面量色值（状态徽章、表头、悬停行）—— 它们是这套系统的一部分，
+  已在 `test/contrast.test.js` 的白名单里登记。**不要新增规范外的色值。**
+- **不用投影做层级**：`box-shadow` 只允许 `inset`（参考 UI 用它做复选框的内填充）。
+- **状态不只靠颜色**：徽章带中文文字（正常 / 偏离 / 失败 / 未报价）。
+- 参考 UI 自带的 **5 处不达 WCAG AA** 的取值已在移植时压暗修正（保持色相）：
+  `--muted` → `#636963`、`--red` → `#b03830`、placeholder 与分隔符改用 `var(--muted)`。
+  **不要改回去** —— `test/contrast.test.js` 会失败。
+- 参考 UI 的可达性做法必须保留：行是 `role="button"` + `tabindex` + `aria-expanded` + Enter/Space；
+  全局 `:focus-visible`；`.sr-only` 表单标签；**常驻的 `.legend`** 解释三个口径
+  （不用 `title` —— 那在触屏与键盘上读不到）。
 
-- **画布是近纯黑 `#0a0a0a`**，深度只来自「画布 vs `surface-card` `#1a1a1a`」的微妙差 —— **不用投影**
-  （规范原文：*The system uses no drop shadows*）。边框一律 1px `hairline #2a2a2a`。
-- **黄色 `#faff69` 只用于两处**：主操作按钮、以及统计数字（`stat-callout`）。
-  规范原文：*Reserve primary (yellow) for primary CTAs, stat-callout numbers, and full-bleed yellow CTA bands.*
-  **不许把黄用于正文、也不许用它做大面积填充**。
-- **不许引入第二个品牌色**。绿/黄/红三个语义色（`success #22c55e` / `warning #f59e0b` / `error #ef4444`）
-  是规范明确留给**产品 UI 状态指示**的，表格里的状态色属于规范内用法。
-- **圆角分级**：按钮 8px（`rounded.md`）、内容卡 12px（`rounded.lg`）、
-  **药丸圆角只给小徽章**（不许用在按钮上）。
-- **字体**：Inter（700 用于标题、600 用于按钮、400 用于正文）；数字与代码用 JetBrains Mono（14/400）。
-  Inter 的字重 700 必须配 **-1 ~ -2.5px 负字距**，否则「读起来太宽」。本项目**不外链 webfont**，
-  用规范自己给出的回退栈。
-- **相邻两个色带不能是同一种表面**。
-
-所有色值以 CSS 变量形式写在 `public/index.html` 的 `:root` 里，变量名与规范的 YAML 键一一对应，
-便于逐条回溯核对。**不要内联十六进制色值。**
-
-规范没有覆盖的部分（它自己的 `Known Gaps` 承认：实际的查询控制台、监控面板、表格浏览器超出它的范围）
-由我们在同一套令牌内推导，并已在 `public/index.html` 的 CSS 顶部注释里逐项标明哪些是推导。
-新增推导的组件时，同样在那里记一笔。
+`public/index.html` 的 `<style>` 末尾有注释标明哪些规则是**参考 UI 没有、由本项目推导**的
+（服务不可达 / 空库 / 需要令牌 / 深度关闭 / 未报价统计项 —— 参考 UI 是静态原型，没有这些运行态）。
+新增推导的组件时同样在那里记一笔，并且只用已登记的令牌。
 
 ## 需求清单
 
@@ -39,6 +36,9 @@
 ## 界面文案
 
 - 用户可见文字一律**中文**；标识符、类名、元素 id、字段名一律**英文**。
+- **例外**：参考 UI 的三个大写英文标签是它的风格装置，保留原样 —— 顶栏的 `ROUTE OBSERVABILITY`、
+  概览区的 `QUOTATION HEALTH`、以及状态点的 `API ONLINE` / `API OFFLINE`。
+  除这三处之外不要新增英文界面文案（失败详情里对方返回的原文当然要原样透出）。
 - 不要 emoji（Slack 消息里的 `:shortcode:` 除外）。
 - **面板不能骗人**：写展示层之前先问「这个数字或符号会不会让人得出错误结论？」。
   这个项目已经因此返工两次 —— `-0.00%`（四舍五入到零却带负号）与「可按」列把「本次没测它」
@@ -46,10 +46,10 @@
 
 ## 改动的验证
 
-- `npm test` 必须全绿（当前 281 个用例），且输出干净。
-- **渲染层没有自动化测试**（零依赖、没有 DOM 测试框架）。唯一的自动化保护是
-  `test/dashboard-dom.test.js`：它静态比对 `init()` 查询的每个 id 都存在于 `index.html`、
-  表头是 10 列、tooltip 文案在位、没有内联事件处理器。
+- `npm test` 必须全绿（当前 **319** 个用例），且输出干净。
+- **渲染层没有自动化测试**（零依赖、没有 DOM 测试框架）。自动化保护只有两条：
+  `test/dashboard-dom.test.js` 静态比对 `init()` 的 id 都在 HTML 里、表头 10 列、图例在位、
+  行是键盘可达的；`test/contrast.test.js` 把可量化的部分钉住（对比度、无投影、无规范外色值、不外链资源）。
 - 所以**改完 `public/` 必须按 README 末尾的冒烟清单手工过一遍**（9 条），
   重点是窄屏错位、展开曲线、以及 `depth.enabled: false` 时整列隐藏。
 

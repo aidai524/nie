@@ -4,3 +4,7 @@ config.json
 *.log
 .DS_Store
 .superpowers/
+
+# v0 生成的参考 UI：只用它的样式（已移植进 public/index.html），
+# 不要把整个 Next.js 应用与 pnpm-lock 提交进仓库 —— 那会让人以为我们有构建栈。
+ui/

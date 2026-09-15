@@ -78,13 +78,13 @@ const sweepDepth = (rows, overrides = {}) => ({
   enabled: true, ts: "2026-09-15T00:30:00.000Z", tiers: [100, 1000, 10000], rows, ...overrides,
 });
 
-test("depthCell：有数据时给最大可通档位", () => {
+test("depthCell：有数据时给最大可通档位（按参考 UI 渲染成美元额）", () => {
   const rows = [depthRow(100, true), depthRow(1000, true), depthRow(10000, false)];
   const depth = sweepDepth(rows);
   const index = buildDepthIndex(rows);
   const cell = depthCell({ pairId: "near:USDC>eth:USDC", depth, index });
-  assert.equal(cell.text, "1k");
-  assert.ok(cell.title.includes("最大可通档位"));
+  assert.equal(cell.text, "$1k", "参考 UI 的「可按」显示美元额，所以带 $ 前缀；值本身仍是真实档位");
+  assert.ok(cell.title.includes("最大金额档位"));
 });
 
 test("depthCell：全档不通给破折号，没扫过给问号，关闭给破折号", () => {
@@ -133,12 +133,15 @@ test("depthCurveFor 按档位升序给出曲线，含成本与对方原文", () 
   ];
   const depth = sweepDepth(rows);
   const curve = depthCurveFor({ pairId: "near:USDC>eth:USDC", depth, index: buildDepthIndex(rows) });
-  assert.deepEqual(curve.map((point) => point.tierText), ["100", "1k"], "必须按档位升序，不是输入顺序");
+  assert.deepEqual(curve.map((point) => point.tierText), ["$100", "$1k"], "必须按档位升序，不是输入顺序");
   assert.equal(curve[0].ok, true);
   assert.equal(curve[0].costText, "0.41%");
   assert.equal(curve[1].ok, false);
   assert.equal(curve[1].costText, "—", "不通的档位没有成本可言");
   assert.equal(curve[1].note, "No liquidity available");
+  // 详情里整行显示用的拼好文本也在纯函数区生成（渲染层只 join），所以它有测试
+  assert.equal(curve[0].text, "$100 · 可通 · 0.41%");
+  assert.equal(curve[1].text, "$1k · 不通 · No liquidity available");
 });
 
 test("depthCurveFor 在没有数据时给空数组", () => {
@@ -151,7 +154,7 @@ test("buildRows 带上 depth 时给出可按列与曲线", () => {
   const built = buildRows({
     pairs: [PAIR_A], latest: [quote(PAIR_A.id)], stats: [], depth: sweepDepth(rows), nowIso: NOW,
   });
-  assert.equal(built[0].depthText, "100");
+  assert.equal(built[0].depthText, "$100");
   assert.equal(built[0].depthCurve.length, 2);
 });
 

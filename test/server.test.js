@@ -202,7 +202,7 @@ test("GET / 返回面板 HTML", async () => {
   const res = await ctx.get("/");
   assert.equal(res.status, 200);
   assert.match(res.headers.get("content-type"), /^text\/html/);
-  assert.ok((await res.text()).includes("NEAR Intents 报价监控"));
+  assert.ok((await res.text()).includes("报价巡检面板"), "面板标题应来自参考 UI");
   await ctx.close();
 });
 

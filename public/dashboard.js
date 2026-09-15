@@ -7,7 +7,7 @@
 // 新增逻辑时先问它属于哪一层：能写成纯函数的绝不写进下面的 init()。
 // ============================================================================
 
-export const STATUS_LABELS = { ok: "正常", deviant: "偏离", error: "失败", unknown: "未知" };
+export const STATUS_LABELS = { ok: "正常", deviant: "偏离", error: "失败", unknown: "未报价" };
 
 // 仅用于「样本不足，仅供参考」的提示标注。这是服务端 detect.minSamples 的默认值，
 // API 不暴露它，所以这里硬编码一份 —— 但它绝不参与状态判定（状态一律取 stateStatus）。
@@ -180,6 +180,9 @@ function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
   const status = quote?.stateStatus ?? null;
   const fromKey = pair?.fromKey ?? pairId.split(">")[0] ?? "";
   const toKey = pair?.toKey ?? pairId.split(">")[1] ?? "";
+  // 参考 UI 在币对下方用 <small> 显示链。我们的币对跨两个网络，所以放**目标链**
+  // （白名单是枢纽辐射形状，目标链是区分维度）。
+  const toChain = String(toKey).split(":")[0] || "未知";
   const convert = (raw, decimals) => (pair ? toHumanAmount(raw, decimals) : null);
 
   const amountIn = convert(quote?.amountIn, pair?.fromDecimals);
@@ -206,6 +209,7 @@ function buildRow({ pair, quote, stat, depth, depthIndex, nowIso }) {
     label: pair?.label ?? pairId,
     fromKey,
     toKey,
+    toChain,
     status,
     statusLabel: STATUS_LABELS[status] ?? STATUS_LABELS.unknown,
     payText: quote?.ok ? formatAmount(amountIn) : "—",
@@ -256,18 +260,21 @@ function dropTrailingZero(value) {
  * 顶栏那行状态文案。放在纯函数区是因为渲染层没有自动化测试，
  * 而这里的判断会直接决定「用户看到的是不是事实」。
  */
-export function freshnessText({ health, loadedAtIso = null, nowIso }) {
-  if (loadedAtIso === null) return { text: "正在加载…", warn: false };
+export function freshnessText({ health, loadedAtIso = null, nowIso, nextRefreshAt = null }) {
+  const nextRefreshText = nextRefreshAt === null
+    ? ""
+    : `下次自动刷新 ${Math.max(0, Math.ceil((nextRefreshAt - Date.parse(nowIso)) / 1000))} 秒`;
+  if (loadedAtIso === null) return { text: "正在加载…", nextRefreshText, warn: false };
   const parts = [`最后更新 ${formatRelativeTime(loadedAtIso, nowIso)}`];
   if (health && health.lastRoundTs === null) {
     // 刚启动：lastRoundTs 是内存态、第一轮还没跑完，/health 因此回 503。
     // 这个 503 的意思是「还没开始」，不是「陈旧」—— 说成陈旧会让人以为采集挂了。
     parts.push("正在采集第一轮（约 15 秒）");
-    return { text: parts.join(" · "), warn: false };
+    return { text: parts.join(" · "), nextRefreshText, warn: false };
   }
   if (health?.ok === false) parts.push("采集已陈旧");
   if (health?.consecutiveRoundErrors > 0) parts.push(`采集轮次连续失败 ${health.consecutiveRoundErrors} 次`);
-  return { text: parts.join(" · "), warn: health?.ok === false };
+  return { text: parts.join(" · "), nextRefreshText, warn: health?.ok === false };
 }
 
 /** 某一对的档位行里，能通过的最大档位。全不通给 null。 */
@@ -316,7 +323,9 @@ export function depthCell({ pairId, depth, index }) {
   if (entry.maxTierUsd === null) {
     return { text: "—", title: "所有档位都没有报价" };
   }
-  return { text: formatTier(entry.maxTierUsd), title: "最大可通档位（名义美元）；点开这一行看完整曲线" };
+  // 参考 UI 的「可按」显示美元额（如 $25,000）。我们的档位本来就是名义美元，
+  // 所以直接渲染成 $1M / $100k —— 照它的形式，同时是真实值，不伪造。
+  return { text: `$${formatTier(entry.maxTierUsd)}`, title: "已验证可通过的最大金额档位（名义美元）" };
 }
 
 /** 展开行里的档位曲线，按档位升序。 */
@@ -326,12 +335,19 @@ export function depthCurveFor({ pairId, depth, index }) {
   if (!entry) return [];
   return [...entry.byTier.values()]
     .sort((left, right) => left.tierUsd - right.tierUsd)
-    .map((row) => ({
-      tierText: formatTier(row.tierUsd),
-      ok: row.ok === true,
-      costText: row.ok === true ? formatCostPct(computeCostPct(row.amountInUsd, row.amountOutUsd)) : "—",
-      note: row.ok === true ? "" : String(row.errorMessage ?? row.errorCode ?? "未知错误"),
-    }));
+    .map((row) => {
+      const ok = row.ok === true;
+      const costText = ok ? formatCostPct(computeCostPct(row.amountInUsd, row.amountOutUsd)) : "—";
+      const note = ok ? "" : String(row.errorMessage ?? row.errorCode ?? "未知错误");
+      return {
+        tierText: `$${formatTier(row.tierUsd)}`,
+        ok,
+        costText,
+        note,
+        // 整段拼好在纯函数区完成，渲染层只负责 join —— 这样这段文案有测试
+        text: `$${formatTier(row.tierUsd)} · ${ok ? "可通" : "不通"} · ${ok ? costText : note}`,
+      };
+    });
 }
 
 export function buildRows({ pairs = [], latest = [], stats = [], depth = null, nowIso }) {
@@ -377,7 +393,13 @@ export function init() {
     countOk: document.getElementById("count-ok"),
     countDeviant: document.getElementById("count-deviant"),
     countError: document.getElementById("count-error"),
+    countUnknown: document.getElementById("count-unknown"),
+    statNone: document.getElementById("stat-none"),
+    liveDot: document.getElementById("live-dot"),
+    apiState: document.getElementById("api-state"),
+    freshDot: document.getElementById("fresh-dot"),
     freshness: document.getElementById("freshness"),
+    nextRefresh: document.getElementById("next-refresh"),
     banner: document.getElementById("banner"),
     tbody: document.getElementById("tbody"),
     empty: document.getElementById("empty"),
@@ -401,6 +423,7 @@ export function init() {
     chainsBuilt: false,
     timer: null,
     inFlight: false,
+    nextRefreshAt: null,
   };
 
   const readToken = () => {
@@ -443,13 +466,21 @@ export function init() {
 
   function renderFreshness() {
     // 判断逻辑在纯函数区（freshnessText），这里只负责赋值
-    const { text, warn } = freshnessText({
+    const { text, nextRefreshText, warn } = freshnessText({
       health: state.health,
       loadedAtIso: state.lastLoadedAt,
       nowIso: new Date().toISOString(),
+      nextRefreshAt: state.nextRefreshAt,
     });
     el.freshness.textContent = text;
-    el.freshness.className = warn ? "warn" : "";
+    el.nextRefresh.textContent = nextRefreshText;
+    el.freshDot.classList.toggle("is-stale", warn);
+  }
+
+  function renderApiState() {
+    const down = state.failures > 0;
+    el.liveDot.classList.toggle("is-down", down);
+    el.apiState.textContent = down ? "API OFFLINE" : "API ONLINE";
   }
 
   function renderChains() {
@@ -471,88 +502,119 @@ export function init() {
     return td;
   }
 
+  /** 需要多个节点（strong / span / small）的单元格 */
+  function cellWith(className, ...nodes) {
+    const td = document.createElement("td");
+    if (className) td.className = className;
+    td.append(...nodes);
+    return td;
+  }
+
+  const textOf = (tag, text, className) => {
+    const node = document.createElement(tag);
+    node.textContent = text ?? "";
+    if (className) node.className = className;
+    return node;
+  };
+
   function toggleDetail(row, anchor) {
     const selector = `tr[data-detail="${row.pairId}"]`;
     const existing = el.tbody.querySelector(selector);
     if (existing) {
       existing.remove();
+      anchor.setAttribute("aria-expanded", "false");
+      anchor.classList.remove("is-expanded");
       return;
     }
     const tr = document.createElement("tr");
-    tr.className = "detail";
+    tr.className = "detail-row";
     tr.dataset.detail = row.pairId;
     const td = document.createElement("td");
     td.colSpan = 10;
+
+    const grid = document.createElement("div");
+    grid.className = "detail-grid";
     const items = [
       ["correlationId", row.detail.correlationId],
-      ["HTTP", row.detail.httpStatus],
-      ["最小收得", row.detail.minAmountOut],
+      ["最小接受", row.detail.minAmountOut],
       ["最小付出", row.detail.minAmountIn],
-      ["预估耗时", `${row.detail.timeEstimate}s`],
+      ["HTTP", row.detail.httpStatus],
       ["swapType", row.detail.swapType],
       ["配置金额", row.detail.configuredAmount],
-      ["连续失败", row.detail.consecutiveFailures],
-      ["状态自", row.detail.statusSince],
+      ["连续失败", `${row.detail.consecutiveFailures} 次`],
+      ["状态起始", row.detail.statusSince],
     ];
-    for (const [key, value] of items) {
-      const span = document.createElement("span");
-      span.className = "kv";
-      const label = document.createElement("b");
-      label.textContent = key;
-      span.append(label, document.createTextNode(` ${value}`));
-      td.append(span);
+    for (const [label, value] of items) {
+      const box = document.createElement("div");
+      box.append(textOf("span", label), textOf("b", value));
+      grid.append(box);
     }
-if (row.depthCurve.length > 0) {
-        const list = document.createElement("ol");
-        list.className = "depth-curve";
-        for (const point of row.depthCurve) {
-          const li = document.createElement("li");
-          li.className = point.ok ? "ok" : "bad";
-          // 一律 textContent：errorMessage 是对方返回的任意字符串
-          li.textContent = point.ok
-            ? `${point.tierText} 可通 · 成本 ${point.costText}`
-            : `${point.tierText} 不通 · ${point.note}`;
-          list.append(li);
-        }
-        td.append(list);
-      }
+    if (row.depthCurve.length > 0) {
+      const depthBox = document.createElement("div");
+      depthBox.className = "depth-detail";
+      depthBox.append(
+        textOf("span", `深度扫描 / ${row.depthCurve.length} 档`),
+        // 拼好的文本来自纯函数区（depthCurveFor 的 text 字段），这里只 join
+        textOf("b", row.depthCurve.map((point) => point.text).join("  ·  ")),
+      );
+      grid.append(depthBox);
+    }
+    td.append(grid);
     tr.append(td);
     tr.addEventListener("click", () => tr.remove());
+    anchor.setAttribute("aria-expanded", "true");
+    anchor.classList.add("is-expanded");
     anchor.after(tr);
   }
 
   function buildRowElement(row) {
     const tr = document.createElement("tr");
-    tr.className = `row ${row.status ?? "unknown"}`;
-    // 用命名变量而不是 tr.children[N]：列的位置会变，下标不会自己跟着变
+    // 可展开的行按参考 UI 做成可交互元素：role=button + tabindex + aria-expanded + Enter/Space，
+    // 否则只能用鼠标下钻（这是本项目此前明确未满足的无障碍需求）。
+    const interactive = Boolean(row.detail);
+    if (interactive) {
+      tr.setAttribute("role", "button");
+      tr.setAttribute("tabindex", "0");
+      tr.setAttribute("aria-expanded", "false");
+      tr.addEventListener("click", () => toggleDetail(row, tr));
+      tr.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggleDetail(row, tr);
+        }
+      });
+    }
     const cells = {
-      pair: cell(row.label, "pair"),
-      status: cell(row.statusLabel, `status ${row.status ?? "unknown"}`),
-      amount: cell(`${row.payText} → ${row.receiveText}`, "amount"),
-      cost: cell(row.costText, "cost"),
-      depth: cell(row.depthText, "depth depth-col"),
-      usd: cell(row.usdText, "usd hide-narrow"),
-      deviation: cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText, row.deviationMuted ? "dev muted" : "dev"),
-      latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, row.latencyWarn ? "latency warn hide-narrow" : "latency hide-narrow"),
-      time: cell(row.lastQuoteText, "time"),
-      note: cell(row.note, `note ${row.noteClass}`.trim()),
+      pair: cellWith("", 
+        textOf("strong", row.fromKey),
+        textOf("span", "→", "arrow"),
+        textOf("strong", row.toKey),
+        textOf("small", `目标链 ${row.toChain}`)),
+      status: cellWith("", textOf("span", row.statusLabel, `status status-${row.statusLabel}`)),
+      amount: cellWith("mono",
+        textOf("span", `${row.payText} `),
+        textOf("span", "→", "arrow"),
+        textOf("span", ` ${row.receiveText}`)),
+      usd: cell(row.usdText, "mono hide-medium"),
+      cost: cell(row.costText, "mono"),
+      deviation: cell(row.deviationMuted ? `${row.deviationText}*` : row.deviationText,
+        row.deviationText === "—" ? "mono" : (row.status === "deviant" ? "mono deviation" : "mono")),
+      depth: cell(row.depthText, "mono depth-value depth-col"),
+      latency: cell(row.latencyMs === null ? "—" : `${Math.round(row.latencyMs)}ms`, "mono hide-medium"),
+      time: cell(row.lastQuoteText, "muted"),
+      note: cell(row.note, row.noteClass === "err" ? "failure-note" : "muted"),
     };
     if (row.lastQuoteTitle) cells.time.title = row.lastQuoteTitle;
     if (row.deviationMuted) cells.deviation.title = "样本不足，服务端此时不会判定偏离；仅供参考";
     if (row.depthTitle) cells.depth.title = row.depthTitle;
-    tr.append(cells.pair, cells.status, cells.amount, cells.cost, cells.depth, cells.usd, cells.deviation, cells.latency, cells.time, cells.note);
-    if (row.detail) {
-      tr.classList.add("clickable");
-      tr.addEventListener("click", () => toggleDetail(row, tr));
-    }
+    tr.append(cells.pair, cells.status, cells.amount, cells.usd, cells.cost,
+      cells.deviation, cells.depth, cells.latency, cells.time, cells.note);
     return tr;
   }
 
   function renderRows() {
     const filtered = applyFilters(sortRows(state.rows), currentFilters());
-    el.shownCount.textContent = filtered.length === state.rows.length
-      ? `共 ${state.rows.length} 对`
-      : `显示 ${filtered.length} / ${state.rows.length} 对`;
+    el.shownCount.textContent = `${filtered.length} / ${state.rows.length} 对`;
     el.tbody.replaceChildren();
     for (const row of filtered) el.tbody.append(buildRowElement(row));
     const noData = state.rows.length === 0;
@@ -563,6 +625,7 @@ if (row.depthCurve.length > 0) {
   async function load() {
     if (state.inFlight) return;
     state.inFlight = true;
+    el.refresh.textContent = "刷新中…";
     try {
       const [latest, stats, health, depth] = await Promise.all([
         apiGet("/latest"),
@@ -591,6 +654,10 @@ if (row.depthCurve.length > 0) {
       el.countOk.textContent = counts.ok;
       el.countDeviant.textContent = counts.deviant;
       el.countError.textContent = counts.error;
+      // 未报价只在非零时占用一格：否则 0/0/0 会被读成「一切正常」
+      el.countUnknown.textContent = counts.unknown;
+      el.statNone.hidden = counts.unknown === 0;
+      renderApiState();
       renderRows();
     } catch (error) {
       state.failures += 1;
@@ -603,6 +670,8 @@ if (row.depthCurve.length > 0) {
       }
     } finally {
       state.inFlight = false;
+      el.refresh.textContent = "刷新数据";
+      renderApiState();
       renderFreshness();
     }
   }
@@ -620,6 +689,7 @@ if (row.depthCurve.length > 0) {
       } else {
         setBanner(`服务不可达：${error.message}`, "err");
       }
+      renderApiState();
       renderFreshness();
     }
   }
@@ -629,6 +699,8 @@ if (row.depthCurve.length > 0) {
     // 后台标签页不轮询；重新可见时会立刻刷一次
     if (document.visibilityState === "hidden") return;
     const wait = Math.min(REFRESH_MS * Math.max(1, state.failures), MAX_BACKOFF_MS);
+    state.nextRefreshAt = Date.now() + wait;
+    renderFreshness();
     state.timer = setTimeout(async () => {
       await load();
       schedule();
@@ -655,6 +727,8 @@ if (row.depthCurve.length > 0) {
     } else if (state.timer !== null) {
       clearTimeout(state.timer);
       state.timer = null;
+      state.nextRefreshAt = null;   // 暂停轮询时清掉，别显示一个不会到点的倒计时
+      renderFreshness();
     }
   });
 
