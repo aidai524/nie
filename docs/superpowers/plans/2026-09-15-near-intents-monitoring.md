@@ -3555,8 +3555,11 @@ git commit -m "feat: 只读 HTTP API，CORS 与可选 Bearer"
 ```js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, createWakeup, createLogger, loadPairs, runRound } from "../src/index.js";
-import { openStore } from "../src/store.js";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseArgs, createWakeup, createLogger, loadPairs, runRound, runMaintenance, main } from "../src/index.js";
+import { hourFloorIso, openStore } from "../src/store.js";
 import { ConfigError } from "../src/config.js";
 
 const PAIR_A = {
@@ -3812,6 +3815,170 @@ test("runRound 更新 metrics 供 /health 读取", async () => {
   assert.equal(ctx.metrics.lastRoundTs, T(0).toISOString());
   assert.equal(typeof ctx.metrics.lastRoundDurationMs, "number");
   store.close();
+});
+
+test("基准必须取自本轮写入之前，否则本次偏离会被自己抹平（回归）", async () => {
+  const { ctx, store } = makeCtx({ fetchImpl: okFetch(100), now: T(0) });
+  // minSamples 降到 1、阈值放到 80%：这样「基准含不含当前样本」会给出截然不同的结论。
+  // 用默认的 minSamples=5 和 10% 是不行的 —— 样本池里多一条 200，中位数仍然是 100，两种顺序都判 deviant。
+  ctx.config = { ...CONFIG, detect: { ...CONFIG.detect, minSamples: 1, priceDeviationPct: 80 } };
+  await runRound(ctx);
+  ctx.fetchImpl = okFetch(200);
+  ctx.now = T(1);
+  const summary = await runRound(ctx);
+  // 正确顺序：基准 = median([100]) = 100，偏离 = +100% > 80% → deviant
+  // 若先写入再读：基准 = median([100, 200]) = 150，偏离 = +33.3% < 80% → 不判
+  assert.equal(summary.deviant, 2, "基准必须先于本轮写入读取");
+  store.close();
+});
+
+const rawRow = (ts, overrides = {}) => ({
+  ts, pairId: PAIR_A.id, ok: true, latencyMs: 1000, amountIn: "100", amountOut: "1500", ...overrides,
+});
+
+// 用本地时间构造 now，因为日汇总的 hourLocal 是本地小时
+const localHour = (hour, minute = 0) => {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date;
+};
+
+const maintenanceCtx = (store, { now, digest, notifier }) => ({
+  store,
+  notifier: notifier ?? { send: async () => ({ ok: true }) },
+  logger: QUIET,
+  now,
+  config: {
+    ...CONFIG,
+    slack: { enabled: true, mention: "", digest },
+    retention: { rawDays: 14, hourlyDays: 0 },
+  },
+});
+
+test("runMaintenance：整点未变时不聚合，但日汇总照常独立评估", async () => {
+  const store = openStore(":memory:");
+  store.upsertPairs([PAIR_A], "2026-09-15T00:00:00.000Z");
+  store.insertQuotes([rawRow("2026-09-15T00:10:00.000Z")]);
+  const now = localHour(9, 5);
+  store.setMeta("rolled_up_to_hour", hourFloorIso(now));
+  const sent = [];
+  await runMaintenance(maintenanceCtx(store, {
+    now,
+    digest: { enabled: true, hourLocal: 9 },
+    notifier: { send: async (text) => { sent.push(text); return { ok: true }; } },
+  }));
+  assert.equal(store.getHistory({ resolution: "hourly" }).length, 0, "整点没变就不该聚合");
+  assert.equal(sent.length, 1, "日汇总不能被整点门控拦住");
+  assert.ok(sent[0].includes("汇总"), "发的应该是汇总消息");
+  assert.equal(store.getMeta("last_digest_ts"), now.toISOString());
+  store.close();
+});
+
+test("runMaintenance：跨过整点时聚合并清理过期原始数据", async () => {
+  const store = openStore(":memory:");
+  store.upsertPairs([PAIR_A], "2026-09-15T00:00:00.000Z");
+  store.insertQuotes([
+    rawRow("2026-08-01T00:10:00.000Z"), // 超过 14 天，应被保留策略清掉
+    rawRow("2026-09-15T00:10:00.000Z"), // 应被聚合成小时桶
+  ]);
+  const now = new Date("2026-09-15T01:05:00.000Z");
+  store.setMeta("rolled_up_to_hour", "2026-09-15T00:00:00.000Z");
+  const sent = [];
+  await runMaintenance(maintenanceCtx(store, {
+    now,
+    digest: { enabled: false, hourLocal: 9 },
+    notifier: { send: async (text) => { sent.push(text); return { ok: true }; } },
+  }));
+  assert.equal(store.getHistory({ resolution: "hourly" }).length, 1, "00 点这一小时应被聚合");
+  assert.equal(store.getMeta("rolled_up_to_hour"), "2026-09-15T01:00:00.000Z");
+  assert.deepEqual(store.getHistory({}).map((q) => q.ts), ["2026-09-15T00:10:00.000Z"], "8 月那条应被清掉");
+  assert.deepEqual(sent, [], "日汇总关掉时不该发");
+  store.close();
+});
+
+const TOKEN_PAYLOAD = {
+  code: 200,
+  data: [
+    { network: "near", symbol: "USDC", decimals: 6, contract_address: "usdc.near", support_payment: true, support_receive: true },
+    { network: "eth", symbol: "USDC", decimals: 6, contract_address: "0xA0b8", support_payment: true, support_receive: true },
+  ],
+};
+
+// fetchImpl 按 URL 分发：两份 token 列表 + 报价端点
+const mainFetch = (quoteImpl) => async (url, init) => {
+  const target = String(url);
+  if (target.includes("pay/tokens")) return { ok: true, status: 200, text: async () => JSON.stringify(TOKEN_PAYLOAD) };
+  if (target.includes("1click")) return { ok: true, status: 200, text: async () => JSON.stringify([]) };
+  return quoteImpl(url, init);
+};
+
+const writeConfig = (dir, overrides = {}) => {
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify({
+    intervalSec: 60,
+    concurrency: 2,
+    requestTimeoutMs: 5000,
+    pairs: [{ from: "near:USDC", to: "eth:USDC" }],
+    addresses: { near: "monitor.near", eth: "0xADDR" },
+    slack: { enabled: false, webhookUrl: "", digest: { enabled: false } },
+    server: { host: "127.0.0.1", port: 0, cors: "*", bearerToken: "" },
+    ...overrides,
+  }));
+  return configPath;
+};
+
+test("main --help 返回 0，且不读配置、不建库、不建目录", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-help-"));
+  const dataPath = join(dir, "nested", "monitor.db");
+  const originalWrite = process.stdout.write;
+  let usage = "";
+  process.stdout.write = (chunk) => { usage += chunk; return true; };
+  let code;
+  try {
+    // 故意指向一个不存在的配置文件：--help 若真的去加载它就会抛 ConfigError
+    code = await main(["--help", "--config", join(dir, "missing.json"), "--data", dataPath], { logger: QUIET });
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  assert.equal(code, 0);
+  assert.ok(usage.includes("--config"), "应把用法打到 stdout");
+  assert.equal(existsSync(join(dir, "nested")), false, "--help 不应建数据目录");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("main --once 跑一轮就退出，并把报价写进库", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-once-"));
+  const configPath = writeConfig(dir);
+  const dataPath = join(dir, "data", "monitor.db");
+  const code = await main(["--once", "--config", configPath, "--data", dataPath], {
+    logger: QUIET,
+    fetchImpl: mainFetch(okFetch(100)),
+  });
+  assert.equal(code, 0);
+  assert.equal(existsSync(dataPath), true, "应把库建在 --data 指定的路径下");
+  const store = openStore(dataPath);
+  assert.equal(store.getHistory({}).length, 1, "一轮应落一条报价");
+  assert.equal(store.getPairStates().get("near:USDC>eth:USDC").status, "ok");
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("main 在一轮全部失败时不崩溃，仍以 0 退出并留下失败记录", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ni-fail-"));
+  const configPath = writeConfig(dir);
+  const dataPath = join(dir, "monitor.db");
+  const code = await main(["--once", "--config", configPath, "--data", dataPath], {
+    logger: QUIET,
+    fetchImpl: mainFetch(failFetch),
+  });
+  assert.equal(code, 0, "一轮失败不应让进程以异常收场");
+  const store = openStore(dataPath);
+  const [quote] = store.getHistory({});
+  assert.equal(quote.ok, false);
+  assert.equal(quote.errorCode, "http_4xx");
+  assert.equal(store.getPairStates().get("near:USDC>eth:USDC").status, "error");
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 ```
 
