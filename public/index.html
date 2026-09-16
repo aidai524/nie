@@ -71,6 +71,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:fo
        所以 .hide-medium / .no-depth 隐藏列后这里的对位依然正确。 */
     th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7), th:nth-child(8),
     td:nth-child(4), td:nth-child(5), td:nth-child(6), td:nth-child(7), td:nth-child(8) { text-align:right; }
+
+    /* 行按参考 UI 是可交互元素（role=button + tabindex），但父级 .table-scroll 是
+       overflow-x:auto —— 它同时是纵向滚动容器，所以画在行外的焦点框会被裁掉，
+       首行/末行 Tab 过去看不见。offset 取负，把 outline 收到行内边界。
+       不用 box-shadow:inset：那会同时换掉机制和属性，而 outline 是已在用的。 */
+    tbody tr[role="button"]:focus-visible { outline-offset:-2px; }
   </style>
 </head>
 
