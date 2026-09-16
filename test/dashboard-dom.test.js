@@ -44,7 +44,10 @@ test("表头是 9 列，且顺序与参考 UI 一致（备注列已去掉，失�
 test("三个口径有可见说明（比 tooltip 更强的可达性要求）", () => {
   // 参考 UI 用一条常驻的 .legend 解释三个列，而不是只给 title 属性 ——
   // title 在触屏与键盘上读不到，这是本项目此前明确未满足的无障碍需求。
-  const legend = html.match(/<p class="legend">([^<]*)<\/p>/);
+  // 放宽 `[^<]*` → `[\s\S]*?`：图例现在是三个 <span>（按语义单元折行），
+  // 不再是一段纯文本。放宽的是**实现方式**，不是可达性要求 ——
+  // 下面仍然断言三个口径都必须出现在图例里。
+  const legend = html.match(/<p class="legend">([\s\S]*?)<\/p>/);
   assert.ok(legend, "缺少 .legend");
   for (const term of ["成本", "较基准", "可按"]) {
     assert.ok(legend[1].includes(term), `图例里没有解释「${term}」`);
