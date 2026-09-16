@@ -133,7 +133,20 @@ docker run -d --name nearintents-monitor \
 
 ## 数据存储
 
-- 数据文件默认落在 `data/monitor.db`，`data/` 与 `config.json` 均在 `.gitignore` 中，不会入库。
+- 活库默认落在 `data/monitor.db`，**不入库** —— 它每分钟都在变，跟进去会在 git 历史里一次次堆完整副本
+  （git 对二进制不做增量），而历史里的二进制删不干净。
+- `config.json` 同样不入库（可能含 Slack webhook）。
+- **想留一份数据，就另存为带日期的快照**：
+
+  ```bash
+  cp data/monitor.db data/snapshots/monitor-$(date +%F).db
+  git add data/snapshots/ && git commit -m "data: 快照 <日期>"
+  ```
+
+  日期化的文件名让 git 把它记成新文件，只占一份存储、也不会被后续运行改写。
+  仓库里现有一份首次推送时留下的 `data/snapshots/monitor-2026-09-16.db`
+  （22.5 小时：15,504 条报价 + 6,240 条深度数据 + 2,426 条告警）。
+- `*.db-wal` / `*.db-shm` **永不入库** —— 它们是事务中间文件，跟库一起提交会在别人检出时造成库不一致。
 - 原始报价保留 14 天，之后按小时聚合永久保留（`config.json` 里的 `retention` 可调）。
 
 ## 面板

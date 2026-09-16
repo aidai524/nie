@@ -56,6 +56,13 @@
 - 所以**改完 `public/` 必须按 README 末尾的冒烟清单手工过一遍**（9 条），
   重点是窄屏错位、展开曲线、以及 `depth.enabled: false` 时整列隐藏。
 
+## 数据
+
+- **不要提交活库 `data/monitor.db`** —— 它每分钟都在变，进 git 会在历史里反复堆完整副本，而二进制删不干净。
+- 要留一份数据就加**带日期的快照**：`cp data/monitor.db data/snapshots/monitor-<日期>.db`，只提交这一个新文件。
+- `*.db-wal` / `*.db-shm` 永不入库（事务中间文件）。
+- `config.json` 永不入库（可能含 Slack webhook）。
+
 ## 依赖
 
 **零运行时依赖**，`package.json` 不得出现 `dependencies`/`devDependencies`。

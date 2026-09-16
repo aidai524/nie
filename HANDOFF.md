@@ -147,7 +147,12 @@ arb:USDC>near:USDC   100 → 0.11%   1k → 0.11%   10k → 0.11%   100k → 0.1
 
 **日志关键字**：`本轮完成: ok=… error=… deviant=…`、`深度扫描完成: N 对 × 5 档 = M 行`、`小时聚合`、`清理 N 条…`。
 
-**数据文件**：默认 `data/monitor.db`（已 gitignore）。原始数据留 14 天，小时聚合永久。深度数据同 14 天、**不做长期聚合**。
+**数据文件**：活库默认 `data/monitor.db`，**不入库**（每分钟都在变，跟进去会在历史里反复堆完整副本）。
+原始数据留 14 天，小时聚合永久；深度数据同 14 天、**不做长期聚合**。
+
+**想留数据就存快照**：`cp data/monitor.db data/snapshots/monitor-<日期>.db` 再提交 —— 带日期的文件名
+让 git 记成新文件，只占一份存储。仓库里有一份 `data/snapshots/monitor-2026-09-16.db`（首次推送时留下的）。
+`*.db-wal` / `*.db-shm` 永不入库（事务中间文件，跟库一起提交会在检出时造成不一致）。
 
 **部署**：`deploy/nearintents-monitor.service`（systemd）与 `deploy/Dockerfile` 都在。README 的部署一节有可照抄的步骤。
 
