@@ -104,10 +104,14 @@ test("不用投影做层级（允许复选框那种 inset 内填充）", () => {
 });
 
 test("不引入设计系统之外的色值", () => {
-  // 来自 ui/app/globals.css（含移植时的 4 处最小修正）
+  // 来源：ui/app/globals.css（含移植时的 4 处最小修正：--muted、--red，
+  // 以及搜索框 placeholder 与分隔符由字面量改用 var(--muted)）。
+  // 2026-09-16 视觉刷新重算了三个**表面**色值（锁 H=75 拉亮度台阶，见
+  // docs/superpowers/specs/2026-09-16-dashboard-visual-refresh-design.md §4），
+  // 所以下面这套值不再与参考 UI 逐字相同 —— 它是「本项目当前实际使用的色值集合」。
   const allowed = new Set(["#171917", "#286643", "#28724c", "#343a34", "#4d5424", "#636963",
     "#655f1c", "#856400", "#8c958a", "#9d641c", "#aeb5aa", "#b03830", "#d7dbd1", "#dcefe0",
-    "#e4e7e1", "#eef0e9", "#f0f2a5", "#f1f3e9", "#f4d9d5", "#f4f5f0", "#f5f7e9", "#faff69",
+    "#e4e7e1", "#e7ebdc", "#edf0e5", "#f0f2a5", "#f4d9d5", "#f4f5f0", "#f4f6f0", "#faff69",
     "#fbfcf8"]);
   const used = [...new Set([...css.matchAll(/#([0-9A-Fa-f]{6})\b/g)].map((m) => `#${m[1].toLowerCase()}`))];
   const extra = used.filter((hex) => !allowed.has(hex));
