@@ -65,6 +65,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,[role="button"]:fo
 
     /* 未报价的统计项只在非零时出现，避免「0 0 0」被读成一切正常 */
     .stat-none strong { color:var(--muted); }
+
+    /* 数字列右对齐 —— 左对齐时 $1,501.96 与 $9.99 的小数点对不齐，竖向扫不出大小。
+       用 nth-child 而不是类名：丢列走的是 display:none，不改变 DOM 序号，
+       所以 .hide-medium / .no-depth 隐藏列后这里的对位依然正确。 */
+    th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7), th:nth-child(8),
+    td:nth-child(4), td:nth-child(5), td:nth-child(6), td:nth-child(7), td:nth-child(8) { text-align:right; }
   </style>
 </head>
 
