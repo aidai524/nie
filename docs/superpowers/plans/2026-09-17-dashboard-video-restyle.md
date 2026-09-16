@@ -568,17 +568,6 @@ Expected: 1 条失败（缺少 layout / rail / content / kpis / kpi / title-row�
             <select id="chain-select"><option value="">全部链</option></select>
           </label>
         </fieldset>
-        <div class="rail-group">
-          <label class="issue-toggle">
-            <input type="checkbox" id="only-problems" />
-            <span class="toggle-box"></span>仅异常
-          </label>
-          <label class="search-label">
-            <span class="sr-only">搜索币对</span>
-            <span class="search-icon">⌕</span>
-            <input id="search" placeholder="搜索源或目标币种" autocomplete="off" />
-          </label>
-        </div>
         <div class="token-box" id="token-box" hidden>
           <span>服务配了访问令牌，请填入：</span>
           <input id="token-input" type="password" placeholder="Bearer token" autocomplete="off" />
@@ -599,7 +588,6 @@ Expected: 1 条失败（缺少 layout / rail / content / kpis / kpi / title-row�
             </p>
           </div>
           <div class="title-actions">
-            <span class="result-count num" id="shown-count"></span>
             <button type="button" class="refresh-button" id="refresh">刷新数据</button>
           </div>
         </div>
@@ -618,6 +606,19 @@ Expected: 1 条失败（缺少 layout / rail / content / kpis / kpi / title-row�
         </p>
 
         <section class="table-card">
+          <!-- 表格作用域的控件（搜索 / 仅异常）—— 2026-09-17 第二次修订把它们从左栏移到表格上方，
+               见 spec §4.1。id 一律不变，所以 init() 不需要改。 -->
+          <div class="table-toolbar">
+            <label class="search-label">
+              <span class="sr-only">搜索币对</span>
+              <span class="search-icon">⌕</span>
+              <input id="search" placeholder="搜索源或目标币种" autocomplete="off" />
+            </label>
+            <label class="issue-toggle">
+              <input type="checkbox" id="only-problems" />
+              <span class="toggle-box"></span>仅异常
+            </label>
+          </div>
           <div class="table-scroll">
             <table id="table">
               <thead>
@@ -635,6 +636,9 @@ Expected: 1 条失败（缺少 layout / rail / content / kpis / kpi / title-row�
               </thead>
               <tbody id="tbody"></tbody>
             </table>
+          </div>
+          <div class="table-foot">
+            <span class="result-count num" id="shown-count"></span>
           </div>
         </section>
 
@@ -1093,7 +1097,123 @@ git commit -m "feat: 概览改 KPI 卡（图标 + 小标签 + 大数字 + 真实
 
 ---
 
-### Task 9: 文档与冒烟清单
+### Task 9: 表格卡外观（工具条胶囊 / 吸顶表头 / 定高滚动 / 页脚计数）
+
+取自 **beUI Pro 的 Data Table** 的视觉与结构（spec §4.1、§2 的第二次修订记录）。
+**只取视觉，不取它的交互**：不做行勾选与「全选」（我们没有批量操作）、不做列排序（我们的排序是刻意的「失败优先」）、
+不做虚拟滚动与分页（我们只有 38 行）。
+
+**Files:**
+- Modify: `public/index.html`（`.table-toolbar` 里的胶囊标记 + 表格卡样式）
+- Test: `test/dashboard-dom.test.js`
+
+**Interfaces:**
+- Consumes: Task 6 已就位的 `.table-toolbar` / `.table-foot` / `#shown-count` / `#only-problems` / `#search`
+- Produces: 新类名 **`.chip-body`**（可反色的胶囊体，替代旧的 `.toggle-box`——后者连同它的 `inset` 内填充规则一并删除）；
+  id 一律不变，**`dashboard.js` 本任务零改动**
+
+- [ ] **Step 1: 写失败的测试**
+
+在 `test/dashboard-dom.test.js` 末尾追加：
+
+```js
+  test("表格卡：工具条、吸顶表头、定高滚动、页脚计数都在", () => {
+    assert.ok(html.includes('class="table-toolbar"'), "缺少表格工具条");
+    assert.ok(html.includes('class="table-foot"'), "缺少表格页脚");
+    // 吸顶表头：必须给 th 本身上 sticky，并配实色底（半透明会透出行内容）
+    const sticky = html.match(/th\s*\{[^}]*position:\s*sticky/);
+    assert.ok(sticky, "th 缺少 position:sticky");
+    assert.match(html, /th\s*\{[^}]*background:\s*var\(--surface-alt\)/, "吸顶表头必须是实色底");
+    // 定高滚动：滚动必须发生在表格自己的容器里（页面级 sticky 会被 .table-card 的 overflow 掐掉）
+    const scroll = html.match(/\.table-scroll\s*\{([^}]*)\}/)[1];
+    assert.match(scroll, /max-height:/, ".table-scroll 缺少 max-height");
+    assert.match(scroll, /overflow-y:\s*auto/, ".table-scroll 缺少 overflow-y:auto");
+    assert.match(scroll, /scrollbar-gutter:\s*stable/, "缺少 scrollbar-gutter:stable（避免滚动条出现时列宽跳动）");
+  });
+
+  test("表格卡：筛选胶囊用 chip-body，且旧的 toggle-box 已清理", () => {
+    assert.ok(html.includes('class="chip-body"'), "缺少胶囊体");
+    assert.ok(!html.includes("toggle-box"), "旧的方块控件应已删除");
+    assert.match(html, /\.chip-body\s*\{[^}]*border-radius:\s*999px/, "胶囊要是全圆角");
+    // 选中态反色：用相邻兄弟选择器，不需要 :has() 也不需要 JS
+    assert.match(html, /input:checked\s*\+\s*\.chip-body\s*\{[^}]*background:\s*var\(--foreground\)/,
+      "选中态要用黑底浅字（与刷新按钮同一对色值）");
+  });
+```
+
+- [ ] **Step 2: 跑测试确认它失败**
+
+Run: `node --disable-warning=ExperimentalWarning --test test/dashboard-dom.test.js 2>&1 | grep -cE "^not ok"`
+Expected: 2 条失败
+
+- [ ] **Step 3: 改标记与样式**
+
+先把工具条里的方块控件换成胶囊体（**只改这一个类名，其余标记不动**）：
+
+```html
+            <label class="issue-toggle">
+              <input type="checkbox" id="only-problems" />
+              <span class="chip-body">仅异常</span>
+            </label>
+```
+
+再加样式：
+
+```css
+/* 表格工具条：左侧搜索、右侧筛选胶囊 */
+.table-toolbar { display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid var(--border); }
+.table-toolbar .search-label { flex:0 1 300px; height:36px; }
+
+/* 筛选胶囊：全圆角；选中态反色（与刷新按钮同一对色值，不新增颜色） */
+.issue-toggle { display:inline-flex; align-items:center; cursor:pointer; }
+.issue-toggle input { position:absolute; opacity:0; }
+.chip-body { display:inline-flex; align-items:center; height:36px; padding:0 14px;
+  border:1px solid var(--border); border-radius:999px; background:var(--surface);
+  color:var(--muted); font-size:12px; }
+.issue-toggle input:checked + .chip-body { background:var(--foreground); border-color:var(--foreground); color:var(--surface); }
+.issue-toggle input:focus-visible + .chip-body { outline:2px solid var(--ring); outline-offset:2px; }
+
+/* 吸顶表头：实色底 + sticky（滚动发生在 .table-scroll 里，所以 sticky 以它为参照） */
+th { position:sticky; top:0; z-index:1; padding:12px 10px; background:var(--surface-alt);
+  color:var(--muted); font-size:11px; font-weight:600; letter-spacing:.04em; white-space:nowrap; }
+
+/* 定高滚动：max-height 见 spec §13（提议 min(70vh, 720px)，人眼确认后再调） */
+.table-scroll { overflow:auto; max-height:min(70vh, 720px); scrollbar-gutter:stable; }
+
+/* 页脚计数条 */
+.table-foot { display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
+```
+
+同时**删掉**旧的 `.toggle-box` 规则与 `.issue-toggle input:checked + .toggle-box` 那条 —— 方块控件已被胶囊取代，
+留着就是死代码（它是全项目最后一处 `inset` 投影用法，删掉之后 `box-shadow` 在样式表里彻底消失）。
+
+- [ ] **Step 4: 跑测试确认通过**
+
+Run: `npm test 2>&1 | grep -E "ℹ (tests|pass|fail)|^not ok"`
+Expected: `fail 0`
+
+- [ ] **Step 5: 人工冒烟（本任务最依赖人眼）**
+
+`npm start`，在 1440 宽度下确认：
+
+1. 页面往下滚时，**表头吸在表格容器顶部**，且滚动时不会有行内容从表头底下透出来（这是实色底的意义）
+2. 表格**内部**出现纵向滚动条（页面本身不再被 38 行撑长），滚动时左栏与标题行**不动**
+3. Tab 到表格的行：焦点框四边仍完整可见（`outline-offset:-2px` 那条修正不能被这次改动破掉）
+4. 点「仅异常」：胶囊从浅底深字变成**黑底浅字**，表格只剩非 ok 的行
+5. 页脚的 `N / M 对` 随筛选变化
+6. 纯键盘：Tab 能到搜索框、胶囊，方向键/空格能切换胶囊
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add public/index.html test/dashboard-dom.test.js
+git commit -m "style: 表格卡加工具条胶囊、吸顶表头、定高滚动与页脚计数"
+```
+
+---
+
+### Task 10: 文档与冒烟清单
 
 **Files:**
 - Modify: `AGENTS.md`、`docs/ui-requirements.md`、`README.md`、`HANDOFF.md`
@@ -1130,6 +1250,8 @@ git commit -m "feat: 概览改 KPI 卡（图标 + 小标签 + 大数字 + 真实
 13. 链计数与 `/latest` 的状态分布对得上（用第 2 步那条 curl 核对），异常角标只出现在真有异常的链上
 14. KPI 说明行是「N 对中的 X%」；若某状态有量但占比极小，应显示 `<1%` 而不是 `0%`
 15. 数字列（USD / 成本 / 较基准 / 可按 / 延迟）右对齐且各行小数点对齐
+16. 往下滚时**表头吸在表格容器顶部**，不会有行内容从表头底下透出来；纵向滚动发生在**表格内部**，左栏与标题行不动
+17. 「仅异常」胶囊选中后变**黑底浅字**，表格只剩非 ok 的行；页脚的 `N / M 对` 跟着变（且与工具条/标题行的计数一致）
 ```
 
 - [ ] **Step 4: 更新 `HANDOFF.md` 的面板一节**
@@ -1141,7 +1263,7 @@ git commit -m "feat: 概览改 KPI 卡（图标 + 小标签 + 大数字 + 真实
 Run: `npm test 2>&1 | grep -E "ℹ (tests|pass|fail)"`
 Expected: `fail 0`
 
-然后 `npm start`，**在 1440 / 1280 / 1024 三档各走一遍那 15 条**。
+然后 `npm start`，**在 1440 / 1280 / 1024 三档各走一遍那 17 条**。
 
 - [ ] **Step 6: 提交**
 
@@ -1154,9 +1276,10 @@ git commit -m "docs: 同步两栏结构与排版变更，冒烟清单扩到 15 �
 
 ## 收尾检查（全部任务完成后）
 
-- [ ] `npm test` 全绿，且用例数**比开工前多**（新增 `formatSharePct`×3 / `shareCaption`×1 / `chainCounts`×5 + 结构类名与排版各 2 + 横向预算 2 + 渲染 3）
+- [ ] `npm test` 全绿，且用例数**比开工前多**（新增 `formatSharePct`×3 / `shareCaption`×1 / `chainCounts`×5 + 结构类名与排版各 2 + 横向预算 2 + 表格卡 2 + 渲染 3）
 - [ ] `grep -c "JetBrains Mono\|mono" public/index.html public/dashboard.js` 全为 0
-- [ ] `git status` 干净；`git log --oneline feat/neutral-palette..HEAD` 有 9 个提交
+- [ ] **全项目再无 `box-shadow` 用法**（最后一处 `inset` 内填充随 `.toggle-box` 一并删掉）；`contrast.test.js` 那条「不用投影做层级」仍绿
+- [ ] `git status` 干净；`git log --oneline feat/neutral-palette..HEAD` 有 10 个提交
 - [ ] **没有**合并到 `main`；`data/monitor.db` 不在暂存区
-- [ ] README 的 15 条冒烟清单在 1440 / 1280 / 1024 三档都过了一遍
-- [ ] spec 第 13 节的四条「未决」逐条确认：左栏横条形态、480px 处理、4 个图标、链列表 `max-height:340px`
+- [ ] README 的 17 条冒烟清单在 1440 / 1280 / 1024 三档都过了一遍
+- [ ] spec 第 13 节的五条「未决」逐条确认：表格定高滚动高度、左栏横条形态、480px 处理、4 个图标、链列表 `max-height:340px`
