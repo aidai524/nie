@@ -7,7 +7,9 @@ ui/
 # 真实配置可能含 Slack webhook，永不提交
 config.json
 
-# 采集数据：按用户要求提交活库本身。
-# 但不提交 WAL/SHM —— 它们是事务中间文件，跟库一起提交会在别人检出时造成不一致。
+# 活库不入库：它每分钟都在变，跟进去会在历史里一次次堆完整副本。
+# 想留一份数据就**另存为带日期的快照**：data/snapshots/<name>-YYYY-MM-DD.db
+# （git 会把它记成新文件，只占一份存储；活库保持忽略）
+data/monitor.db
 data/*.db-wal
 data/*.db-shm
