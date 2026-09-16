@@ -13,6 +13,9 @@ import { readFileSync } from "node:fs";
 // 参考 UI（ui/app/globals.css）自带 5 处不达 AA，移植时做了最小压暗（保持色相）：
 //   --muted #697069 → #636963、--red #b83b32 → #b03830，
 //   搜索框 placeholder 与分隔符由字面量改用 var(--muted)。下面的断言按修正后的值验。
+//
+// 2026-09-16 中性化：中性色的色相由暖绿改为中性灰（保留相对亮度、只去色相），
+// 所以 30 条对比度断言全部照旧达标，变的只是白名单里的值。语义色未动。
 
 const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const css = html.match(/<style>([\s\S]*?)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g, "");
@@ -109,12 +112,13 @@ test("不引入设计系统之外的色值", () => {
   // 来源：ui/app/globals.css（含移植时的 4 处最小修正：--muted、--red，
   // 以及搜索框 placeholder 与分隔符由字面量改用 var(--muted)）。
   // 2026-09-16 视觉刷新重算了三个**表面**色值（锁 H=75 拉亮度台阶，见
-  // docs/superpowers/specs/2026-09-16-dashboard-visual-refresh-design.md §4），
+  // docs/superpowers/specs/2026-09-16-dashboard-visual-refresh-design.md §4）；
+  // 同日**中性化**又把全部中性值去掉了色相（保留相对亮度，故对比度关系不变）。
   // 所以下面这套值不再与参考 UI 逐字相同 —— 它是「本项目当前实际使用的色值集合」。
-  const allowed = new Set(["#171917", "#286643", "#28724c", "#343a34", "#636963",
-    "#655f1c", "#856400", "#8c958a", "#9d641c", "#aeb5aa", "#b03830", "#d7dbd1", "#dcefe0",
-    "#e4e7e1", "#e7ebdc", "#edf0e5", "#f0f2a5", "#f4d9d5", "#f4f5f0", "#f4f6f0", "#faff69",
-    "#fbfcf8"]);
+  const allowed = new Set(["#181818", "#286643", "#28724c", "#383838", "#676767",
+    "#655f1c", "#856400", "#929292", "#9d641c", "#b3b3b3", "#b03830", "#d9d9d9", "#dcefe0",
+    "#e6e6e6", "#e9e9e9", "#efefef", "#f0f2a5", "#f4d9d5", "#f4f4f4", "#f5f5f5", "#faff69",
+    "#fcfcfc"]);
   const used = [...new Set([...css.matchAll(/#([0-9A-Fa-f]{6})\b/g)].map((m) => `#${m[1].toLowerCase()}`))];
   const extra = used.filter((hex) => !allowed.has(hex));
   assert.deepEqual(extra, [], `出现了设计系统之外的色值: ${extra.join(", ")}`);

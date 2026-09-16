@@ -9,13 +9,19 @@
   **不要引入 Tailwind 或任何构建步骤** —— 这份样式表本身不依赖它们（无工具类、无 `@apply`）。
 - **现在唯一的事实来源是 `public/index.html` 的 `<style>`**。要改样式就在那里改。
   `design/clickhouse/` 是上一版设计系统，**已弃用，仅存档**。
-- 主题是**浅色**（`--background:#f4f5f0`，`color-scheme:light`）。
+- 主题是**浅色**，中性色是**中性灰**（`--background:#f4f4f4`，`color-scheme:light`）。
+- 2026-09-16 **中性化**：中性值已去掉参考 UI 的暖绿色相（做法是保留相对亮度、只去色相，
+  所以明度台阶与对比度关系不变）：`--background:#f4f4f4` `--surface:#fcfcfc` `--surface-alt:#e9e9e9`
+  `--border:#d9d9d9` `--muted:#676767` `--foreground:#181818`。来源与做法记在 `public/index.html`
+  的 `<style>` 注释块里。**语义色（`--yellow` `--yellow-soft` `--red` `--orange` `--green`
+  与四个徽章底色）未动** —— 所以当下绿黄的强调色是页面上仅剩的暖色，这是**有意留下的中间状态**。
 - 令牌在 `:root` 定义；规则内仍有若干字面量色值（状态徽章、表头、悬停行）—— 它们是这套系统的一部分，
   已在 `test/contrast.test.js` 的白名单里登记。**不要新增规范外的色值。**
 - **不用投影做层级**：`box-shadow` 只允许 `inset`（参考 UI 用它做复选框的内填充）。
 - **状态不只靠颜色**：徽章带中文文字（正常 / 偏离 / 失败 / 未报价）。
 - 参考 UI 自带的 **5 处不达 WCAG AA** 的取值已在移植时压暗修正（保持色相）：
-  `--muted` → `#636963`、`--red` → `#b03830`、placeholder 与分隔符改用 `var(--muted)`。
+  `--muted` → `#636963`（**该值后又于 2026-09-16 中性化为 `#676767`**）、`--red` → `#b03830`、
+  placeholder 与分隔符改用 `var(--muted)`。
   **不要改回去** —— `test/contrast.test.js` 会失败。
 - 参考 UI 的可达性做法必须保留：行是 `role="button"` + `tabindex` + `aria-expanded` + Enter/Space；
   全局 `:focus-visible`；`.sr-only` 表单标签；**常驻的 `.legend`** 解释三个口径
