@@ -1,10 +1,13 @@
 node_modules/
-data/
-config.json
 *.log
 .DS_Store
 .superpowers/
-
-# v0 生成的参考 UI：只用它的样式（已移植进 public/index.html），
-# 不要把整个 Next.js 应用与 pnpm-lock 提交进仓库 —— 那会让人以为我们有构建栈。
 ui/
+
+# 真实配置可能含 Slack webhook，永不提交
+config.json
+
+# 采集数据：按用户要求提交活库本身。
+# 但不提交 WAL/SHM —— 它们是事务中间文件，跟库一起提交会在别人检出时造成不一致。
+data/*.db-wal
+data/*.db-shm
