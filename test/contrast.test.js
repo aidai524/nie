@@ -61,7 +61,9 @@ const PAIRS = [
   ["正文 / 卡片", token("foreground"), token("surface"), 4.5],
   ["次要文字 / 页面背景", token("muted"), token("background"), 4.5],
   ["次要文字 / 卡片", token("muted"), token("surface"), 4.5],
-  ["统计数字 / 页面背景", token("foreground"), token("background"), 4.5],
+  // 从规则读，不要写 token("foreground")：那条断言曾声称测「统计数字」，
+  // 实际验的是 foreground，而 .stat strong 当时用的是 #4d5424 —— 等于没测。
+  ["统计数字 / 页面背景", fromRule(/\.stat strong\s*\{([^}]*)\}/, "color"), token("background"), 4.5],
   ["失败统计数字 / 页面背景", token("red"), token("background"), 4.5],
   ["品牌标记（黄底黑字）", token("yellow"), token("foreground"), 3],
   ["刷新按钮（黑底浅字）", token("surface"), token("foreground"), 4.5],
@@ -109,7 +111,7 @@ test("不引入设计系统之外的色值", () => {
   // 2026-09-16 视觉刷新重算了三个**表面**色值（锁 H=75 拉亮度台阶，见
   // docs/superpowers/specs/2026-09-16-dashboard-visual-refresh-design.md §4），
   // 所以下面这套值不再与参考 UI 逐字相同 —— 它是「本项目当前实际使用的色值集合」。
-  const allowed = new Set(["#171917", "#286643", "#28724c", "#343a34", "#4d5424", "#636963",
+  const allowed = new Set(["#171917", "#286643", "#28724c", "#343a34", "#636963",
     "#655f1c", "#856400", "#8c958a", "#9d641c", "#aeb5aa", "#b03830", "#d7dbd1", "#dcefe0",
     "#e4e7e1", "#e7ebdc", "#edf0e5", "#f0f2a5", "#f4d9d5", "#f4f5f0", "#f4f6f0", "#faff69",
     "#fbfcf8"]);
